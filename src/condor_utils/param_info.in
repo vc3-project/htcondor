@@ -794,7 +794,7 @@ review=?
 tags=eventd,scheduled_event
 
 [DAGMAN_LOG_ON_NFS_IS_ERROR]
-default=true
+default=false
 type=bool
 reconfig=false
 customization=seldom
@@ -2751,6 +2751,15 @@ customization=seldom
 friendly_name=Gridmanager Gahp Call Timeout Condor
 review=?
 tags=gridmanager,condorjob
+
+[GRIDMANAGER_GAHP_RESPONSE_TIMEOUT]
+default=20
+type=int
+reconfig=true
+customization=seldom
+friendly_name=Gridmanager Gahp Response Timeout
+review=?
+tags=gridmanager,gahp-client
 
 [CONDORC_ATTRS_TO_COPY]
 default=
@@ -5058,6 +5067,43 @@ friendly_name=Queue All Users Trusted
 review=?
 tags=schedd,qmgmt
 
+[SYSTEM_IMMUTABLE_JOB_ATTRS]
+default=Owner ClusterId ProcId MyType TargetType
+type=string
+reconfig=true
+customization=never
+friendly_name=Job attributes that may not change once set
+review=?
+tags=schedd,qmgmt,qedit
+
+[IMMUTABLE_JOB_ATTRS]
+default=
+type=string
+reconfig=true
+customization=seldom
+friendly_name=Job attributes that may not change once set
+review=?
+tags=schedd,qmgmt,qedit
+
+[SYSTEM_PROTECTED_JOB_ATTRS]
+default=
+type=string
+reconfig=true
+customization=never
+friendly_name=Job attributes that may only be changed by a queue superuser once set
+review=?
+tags=schedd,qmgmt,qedit
+
+[PROTECTED_JOB_ATTRS]
+default=
+type=string
+reconfig=true
+customization=seldom
+friendly_name=Job attributes that may only be changed by a queue superuser once set
+review=?
+tags=schedd,qmgmt,qedit
+
+
 [GLOBAL_JOB_ID_WITH_TIME]
 default=true
 type=bool
@@ -7301,23 +7347,59 @@ customization=devel
 friendly_name=Control use of V3 query protocol for condor_q
 usage=Set to false to disable V3 query protocol for condor_q.
 
-[ENABLE_IPV6]
-default=false
+[CONDOR_Q_ONLY_MY_JOBS]
+default=true
 type=bool
-reconfig=true
+reconfig=false
+friendly_Name=Whether condor_q will query all jobs, or only the current owners jobs by default
+usage=Set to true to have condor_q query only the owners jobs by default
+
+[ENABLE_IPV6]
+default=auto
 customization=seldom
 friendly_name=Enable IPv6
-usage=Should HTCondor listen on IPv6 interfaces?
+usage=Should HTCondor use IPv6 interfaces?
 tags=daemon_core
 
 [ENABLE_IPV4]
-default=true
+default=auto
 version=8.1.3
-type=bool
-reconfig=true
 customization=seldom
 friendly_name=Enable IPv4
-usage=Should HTCondor listen on IPv4 interfaces?
+usage=Should HTCondor use IPv4 interfaces?
+tags=daemon_core
+
+[PREFER_IPV4]
+default=true
+version=8.5.3
+type=bool
+reconfig=false
+friendly_name=Prefer IPv4
+usage=Should HTCondor prefer IPv4 (over IPv6) when given the choice?
+tags=daemon_core
+
+[ADVERTISE_IPV4_FIRST]
+default=$(PREFER_IPV4)
+version=8.5.3
+reconfig=false
+friendly_name=Advertise IPv4 First
+usage=Should HTCondor list its IPv4 address(es) before its IPv6 addresses?
+tags=daemon_core
+
+[IGNORE_TARGET_PROTOCOL_PREFERENCE]
+default=$(PREFER_IPV4)
+version=8.5.3
+reconfig=false
+friendly_name=Ignore target protocol preference
+usage=Should HTCondor ignore the target's listed protocol preferences?
+tags=daemon_core
+
+[PREFER_OUTBOUND_IPV4]
+default=$(PREFER_IPV4)
+version=8.5.3
+reconfig=false
+friendly_name=Prefer to connect over IPv4
+usage=Should HTCondor prefer IPv4 if it's ignoring the target's preferences?
 tags=daemon_core
 
 [JOB_EXECDIR_PERMISSIONS]

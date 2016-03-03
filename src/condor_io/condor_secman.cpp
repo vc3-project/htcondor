@@ -568,6 +568,41 @@ SecMan::FillInSecurityPolicyAd( DCpermission auth_level, ClassAd* ad,
 	return true;
 }
 
+// Fill'ing in the security policy ad is very expensive, sometimes requiring
+// 400 param calls.  Usually, we call it with the same parameters over and over,
+// so keep track of the last set of parameters, and cache the last one returned.
+
+bool
+SecMan::FillInSecurityPolicyAdFromCache(DCpermission auth_level, ClassAd* ad, 
+								bool raw_protocol,
+								bool use_tmp_sec_session,
+								bool force_authentication )
+{
+	if ((m_cached_auth_level == auth_level) &&
+		(m_cached_raw_protocol == raw_protocol) &&
+		(m_cached_use_tmp_sec_session == use_tmp_sec_session) &&
+		(m_cached_force_authentication == force_authentication)) {
+
+			// A Hit!
+		if (m_cached_return_value) {
+			ad->Update(m_cached_policy_ad);
+
+		}
+		return m_cached_return_value;
+	}	
+
+		// Miss...
+	m_cached_auth_level = auth_level;
+	m_cached_raw_protocol = raw_protocol;
+	m_cached_use_tmp_sec_session = use_tmp_sec_session;
+	m_cached_force_authentication = force_authentication;
+	
+	m_cached_policy_ad.Clear(); 
+	m_cached_return_value = FillInSecurityPolicyAd(auth_level, &m_cached_policy_ad, raw_protocol, use_tmp_sec_session, force_authentication);
+	ad->Update(m_cached_policy_ad);
+	return m_cached_return_value;
+}
+
 bool
 SecMan::ReconcileSecurityDependency (sec_req &a, sec_req &b) {
 	if (a == SEC_REQ_NEVER) {
@@ -2020,15 +2055,21 @@ SecManStartCommand::receivePostAuthInfo_inner()
 				// gather some additional data for useful error reporting
 				MyString response_user;
 				MyString response_method = m_sock->getAuthenticationMethodUsed();
-				if (response_method == "") {
-					response_method = "(no authentication)";
-				}
 				post_auth_info.LookupString(ATTR_SEC_USER,response_user);
 
 				// push error message on the stack and print to the log
 				MyString errmsg;
-				errmsg.formatstr("Received \"%s\" from server for user %s using method %s.",
-					response_rc.Value(), response_user.Value(), response_method.Value());
+				if (response_method == "") {
+					response_method = "(no authentication)";
+					errmsg.formatstr( "Received \"%s\" from server for user %s using no authentication method, which may imply host-based security.  Our address was '%s', and server's address was '%s'.  Check your ALLOW settings and IP protocols.",
+						response_rc.Value(), response_user.Value(),
+						m_sock->my_addr().to_ip_string().Value(),
+						m_sock->peer_addr().to_ip_string().Value()
+						);
+				} else {
+					errmsg.formatstr("Received \"%s\" from server for user %s using method %s.",
+						response_rc.Value(), response_user.Value(), response_method.Value());
+				}
 				dprintf (D_ALWAYS, "SECMAN: FAILED: %s\n", errmsg.Value());
 				m_errstack->push ("SECMAN", SECMAN_ERR_AUTHORIZATION_FAILED, errmsg.Value());
 				return StartCommandFailed;
@@ -2621,6 +2662,7 @@ SecMan::SecMan()
 	if ( NULL == m_ipverify ) {
 		m_ipverify = new IpVerify( );
 	}
+	m_cached_auth_level = (DCpermission)-1; // intentionally invalid
 	sec_man_ref_count++;
 }
 

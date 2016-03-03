@@ -471,6 +471,25 @@ bool param_and_insert_unique_items(const char * param_name, StringList & items, 
 	return num_inserts > 0;
 }
 
+/* 
+  A convenience function that calls param() then inserts items from the value
+  into the given classad:References set.  Useful whenever a param knob contains
+  a string list of ClassAd attribute names, e.g. IMMUTABLE_JOB_ATTRS.
+  Return true if given param name was found, false if not.
+*/
+bool
+param_and_insert_attrs(const char * param_name, classad::References & attrs)
+{
+	std::string value;
+	const std::string * attr;
+	if (param(value, param_name)) {
+		StringTokenIterator it(value);
+		while ((attr = it.next_string())) { attrs.insert(*attr); }
+		return true;
+	}
+	return false;
+}
+
 // Function implementations
 
 void
@@ -2577,6 +2596,24 @@ param_boolean( const char *name, bool default_value, bool do_log,
 	return result;
 }
 
+bool
+param_true( const char * name ) {
+	bool value;
+	char * string = param( name );
+	bool valid = string_is_boolean_param( string, value );
+	free( string );
+	return valid && value;
+}
+
+bool
+param_false( const char * name ) {
+	bool value;
+	char * string = param( name );
+	bool valid = string_is_boolean_param( string, value );
+	free( string );
+	return valid && (!value);
+}
+
 char *
 expand_param( const char *str )
 {
@@ -2845,7 +2882,37 @@ reinsert_specials( const char* host )
 	}
 	snprintf(buf,40,"%u",reinsert_ppid);
 	insert("PPID", buf, ConfigMacroSet, DetectedMacro);
-	insert("IP_ADDRESS", my_ip_string(), ConfigMacroSet, DetectedMacro);
+
+	//
+	// get_local_ipaddr() may return the 'default' IP if the protocol-
+	// specific address for the given protocol isn't set.  The 'default'
+	// IP address could be IPv6 if:
+	//
+	//	* NETWORK_INTERACE is IPv6,
+	//  * the IPv6 address is the only public one, or
+	//	* the public IPv6 address is listed before the IPv4 address.
+	//
+	// (We should probably prefer public Ipv4 to public IPv6, but don't.)  See
+	// init_local_hostname_impl(), which calls network_interface_to_ip().
+	//
+	condor_sockaddr ip = get_local_ipaddr( CP_IPV4 );
+	insert( "IP_ADDRESS", ip.to_ip_string().Value(), ConfigMacroSet, DetectedMacro );
+	if( ip.is_ipv6() ) {
+		insert( "IP_ADDRESS_IS_IPV6", "true", ConfigMacroSet, DetectedMacro );
+	} else {
+		insert( "IP_ADDRESS_IS_IPV6", "false", ConfigMacroSet, DetectedMacro );
+	}
+
+	condor_sockaddr v4 = get_local_ipaddr( CP_IPV4 );
+	if( v4.is_ipv4() ) {
+		insert( "IPV4_ADDRESS", v4.to_ip_string().Value(), ConfigMacroSet, DetectedMacro );
+	}
+
+	condor_sockaddr v6 = get_local_ipaddr( CP_IPV6 );
+	if( v6.is_ipv6() ) {
+		insert( "IPV6_ADDRESS", v6.to_ip_string().Value(), ConfigMacroSet, DetectedMacro );
+	}
+
 
 	{ // set DETECTED_CPUS to the correct value, either hyperthreaded or not.
 		int num_cpus=0;

@@ -1110,7 +1110,32 @@ bool Sock::guess_address_string(char const* host, int port, condor_sockaddr& add
 	return true;
 }
 
+bool routingParametersInitialized = false;
+bool ignoreTargetProtocolPreference = false;
+bool preferOutboundIPv4 = false;
+bool acceptIPv4 = false;
+bool acceptIPv6 = false;
+
 bool Sock::chooseAddrFromAddrs( char const * host, std::string & addr ) {
+	if(! routingParametersInitialized) {
+		ignoreTargetProtocolPreference = param_boolean( "IGNORE_TARGET_PROTOCOL_PREFERENCE", false );
+		preferOutboundIPv4 = param_boolean( "PREFER_OUTBOUND_IPV4", false );
+
+		acceptIPv4 = ! param_false( "ENABLE_IPV4" );
+		if( acceptIPv4 && ! param_defined( "IPV4_ADDRESS" ) ) {
+			acceptIPv4 = false;
+		}
+
+		acceptIPv6 = ! param_false( "ENABLE_IPV6" );
+		if( acceptIPv6 && ! param_defined( "IPV6_ADDRESS" ) ) {
+			acceptIPv6 = false;
+		}
+
+		if( (!acceptIPv4) && (!acceptIPv6) ) {
+			EXCEPT( "Unwilling or unable to try IPv4 or IPv6.  Check the settings ENABLE_IPV4, ENABLE_IPV6, and NETWORK_INTERFACE.\n" );
+		}
+	}
+
 	//
 	// If host is a Sinful string and contains an addrs parameter,
 	// choose one of the listed addresses and rewrite host to match.
@@ -1147,6 +1172,15 @@ bool Sock::chooseAddrFromAddrs( char const * host, std::string & addr ) {
 	for( unsigned i = 0; i < v->size(); ++i ) {
 		condor_sockaddr c = (*v)[i];
 		int d = -1 * c.desirability();
+		if( ignoreTargetProtocolPreference ) {
+			// This would work with d *= 2 and d -= 1.  10 and 1 may be
+			// more obvious when looking at logs, but there's no point
+			// changing it unless we need more room in the desirability
+			// spae for some reason.
+			d *= 100;
+			if( preferOutboundIPv4 && c.is_ipv4() ) { d -= 10; }
+			if( (!preferOutboundIPv4) && (!c.is_ipv4()) ) { d -= 10; }
+		}
 		sortedByDesire.insert(std::make_pair( d, c ));
 		dprintf( D_HOSTNAME, "\t%d\t%s\n", d, c.to_ip_and_port_string().c_str() );
 	}
@@ -1162,9 +1196,16 @@ bool Sock::chooseAddrFromAddrs( char const * host, std::string & addr ) {
 		// document that ENABLE_IPV6 should be false unless you have a
 		// public IPv6 address (or one which everyone in your pool can
 		// otherwise reach).
+		//
+		// That was a good idea, but in practice we want ENABLE_IPV6 to
+		// have a smarter option, in which case we don't know if we
+		// should consider IPv6 until we've examined the interfaces to
+		// determine if IPv6 exists at all.  With PREFER_IPV4, this only
+		// really matters when trying bind command sockets, but we may as
+		// well get it right here.
 		dprintf( D_HOSTNAME, "Considering address candidate %s.\n", candidate.to_ip_and_port_string().c_str() );
-		if(( candidate.is_ipv4() && param_boolean( "ENABLE_IPV4", true ) ) ||
-			( candidate.is_ipv6() && param_boolean( "ENABLE_IPV6", false ) )) {
+		if(( candidate.is_ipv4() && acceptIPv4 ) ||
+			( candidate.is_ipv6() && acceptIPv6 )) {
 			dprintf( D_HOSTNAME, "Found compatible candidate %s.\n", candidate.to_ip_and_port_string().c_str() );
 			foundAddress = true;
 			break;

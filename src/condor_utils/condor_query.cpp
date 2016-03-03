@@ -277,6 +277,13 @@ CondorQuery (AdTypes qType)
 		command = QUERY_ANY_ADS;
 		break;
 
+	  case ACCOUNTING_AD:
+		query.setNumStringCats (0);
+		query.setNumIntegerCats(0);
+		query.setNumFloatCats  (0);
+		command = QUERY_ACCOUNTING_ADS;
+		break;
+
 	  default:
 		command = -1;
 		queryType = (AdTypes) -1;
@@ -602,6 +609,9 @@ getQueryAd (ClassAd &queryAd)
 		SetTargetTypeName (queryAd, HAD_ADTYPE);
 		break;
 
+	  case ACCOUNTING_AD:
+		SetTargetTypeName(queryAd, ACCOUNTING_ADTYPE);
+		break;
 	  default:
 		return Q_INVALID_QUERY;
 	}
@@ -659,28 +669,28 @@ CondorQuery::setDesiredAttrs(char const * const *attrs)
 {
 	MyString val;
 	::join_args(attrs,&val);
-	extraAttrs.Assign(ATTR_PROJECTION,val.Value());
+	setDesiredAttrs(val.c_str());
+}
+
+void
+CondorQuery::setDesiredAttrs(const classad::References &attrs)
+{
+	std::string str;
+	str.reserve(attrs.size()*30); // make a guess at total string space needed.
+	for (classad::References::const_iterator it = attrs.begin(); it != attrs.end(); ++it) {
+		if ( ! str.empty()) str += " ";
+		str += *it;
+	}
+	setDesiredAttrs(str.c_str());
 }
 
 void
 CondorQuery::setDesiredAttrs(const std::vector<std::string> &attrs)
 {
-	std::stringstream ss;
-	std::vector<std::string>::const_iterator it=attrs.begin();
-	while (true)
-	{
-		ss << *it;
-		it++;
-		if (it != attrs.end())
-		{
-			ss << " ";
-		}
-		else
-		{
-			break;
-		}
-	}
-	extraAttrs.InsertAttr(ATTR_PROJECTION, ss.str());
+	std::string str;
+	str.reserve(attrs.size()*30); // make a guess at total string space needed.
+	::join(attrs, " ", str);
+	setDesiredAttrs(str.c_str());
 }
 
 void

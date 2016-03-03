@@ -145,6 +145,9 @@ class Matchmaker : public Service
 
 		bool getGroupInfoFromUserId(const char* user, string& groupName, float& groupQuota, float& groupUsage);
 
+		void forwardAccountingData(std::set<std::string> &names);
+		void forwardGroupAccounting(DCCollector &collector, GroupEntry *ge);
+
     protected:
 		char * NegotiatorName;
 		int update_interval;
@@ -158,7 +161,7 @@ class Matchmaker : public Service
 		void updateCollector();
 		
 		// auxillary functions
-		bool obtainAdsFromCollector (ClassAdList&, ClassAdListDoesNotDeleteAds&, ClassAdListDoesNotDeleteAds&, ClaimIdHash& );	
+		bool obtainAdsFromCollector (ClassAdList&, ClassAdListDoesNotDeleteAds&, ClassAdListDoesNotDeleteAds&, std::set<std::string> &, ClaimIdHash& );	
 		char * compute_significant_attrs(ClassAdListDoesNotDeleteAds & startdAds);
 		bool consolidate_globaljobprio_submitter_ads(ClassAdListDoesNotDeleteAds & scheddAds);
 

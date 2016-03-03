@@ -133,8 +133,8 @@ ReadMultipleUserLogs::readEvent (ULogEvent * & event)
 
 		if ( outcome != ULOG_NO_EVENT ) {
 			if ( oldestEventMon == NULL ||
-						(oldestEventMon->lastLogEvent->eventTime >
-						monitor->lastLogEvent->eventTime) ) {
+						(oldestEventMon->lastLogEvent->GetEventclock() >
+						monitor->lastLogEvent->GetEventclock()) ) {
 				oldestEventMon = monitor;
 			}
 		}
@@ -600,10 +600,6 @@ MultiLogFiles::logFileNFSError(const char *logFilename, bool nfsIsError)
 		if ( nfsIsError ) {
 			dprintf(D_ALWAYS, "ERROR: log file %s is on NFS.\n", logFilename);
 			return true;
-		} else {
-			dprintf(D_FULLDEBUG, "WARNING: log file %s is on NFS.  This "
-				"could cause log file corruption and is _not_ recommended.\n",
-				logFilename);
 		}
 	}
 

@@ -82,15 +82,8 @@ update (ClassAd *ad)
 	return rval;
 }
 
-
-void TrackTotals::
-displayTotals (FILE *file, int keyLength)
+bool TrackTotals::haveTotals()
 {
-	ClassTotal *ct=0;
-	MyString	key;
-	int k;
-	bool auto_key_length = keyLength < 0;
-
 	// display totals only for meaningful modes
 	switch (ppo)
 	{
@@ -105,13 +98,27 @@ displayTotals (FILE *file, int keyLength)
 #endif /* HAVE_EXT_POSTGRESQL */
 
     	case PP_SCHEDD_NORMAL:
-    	case PP_SCHEDD_SUBMITTORS:   
+    	case PP_SUBMITTER_NORMAL:
     	case PP_CKPT_SRVR_NORMAL:
 			break;
 
 		default:
-			return;
+			return false;
 	}
+	return true;
+}
+
+
+void TrackTotals::
+displayTotals (FILE *file, int keyLength)
+{
+	ClassTotal *ct=0;
+	MyString	key;
+	int k;
+	bool auto_key_length = keyLength < 0;
+
+	// display totals only for meaningful modes
+	if ( ! haveTotals()) return;
 
 		
 	// sort the keys (insertion sort) so we display totals in sorted order
@@ -144,15 +151,18 @@ displayTotals (FILE *file, int keyLength)
 	fprintf (file, "\n");
 
 	// now that our keys are sorted, display the totals in sort order
+	bool had_tot_keys = false;
 	for (k = 0; k < allTotals.getNumElements(); k++)
 	{
 		fprintf (file, "%*.*s", keyLength, keyLength, keys[k]);
 		allTotals.lookup(MyString(keys[k]), ct);
 		free((void *)const_cast<char*>(keys[k]));
 		ct->displayInfo(file);
+		had_tot_keys = true;
 	}
 	delete [] keys;
-	fprintf (file, "\n%*.*s", keyLength, keyLength, "Total");
+	if (had_tot_keys) fprintf(file, "\n");
+	fprintf (file, "%*.*s", keyLength, keyLength, "Total");
 	topLevelTotal->displayInfo(file,1);
 
 	if (malformed > 0)
@@ -209,12 +219,12 @@ void StartdNormalTotal::
 displayHeader(FILE *file)
 {
 #if HAVE_BACKFILL
-	fprintf (file, "%6.6s %5.5s %7.7s %9.9s %7.7s %10.10s %8.8s\n",
+	fprintf (file, "%6.6s %5.5s %7.7s %9.9s %7.7s %10.10s %8.8s %6.6s\n",
 					"Total", "Owner", "Claimed", "Unclaimed", "Matched",
-					"Preempting", "Backfill");
+					"Preempting", "Backfill", "Drain");
 #else
-	fprintf (file, "%9.9s %5.5s %7.7s %9.9s %7.7s %10.10s\n", "Machines", 
-					"Owner", "Claimed", "Unclaimed", "Matched", "Preempting");
+	fprintf (file, "%9.9s %5.5s %7.7s %9.9s %7.7s %10.10s %6.6s\n", "Machines",
+					"Owner", "Claimed", "Unclaimed", "Matched", "Preempting", "Drain");
 #endif /* HAVE_BACKFILL */
 }
 
@@ -223,12 +233,12 @@ void StartdNormalTotal::
 displayInfo (FILE *file, int)
 {
 #if HAVE_BACKFILL
-	fprintf ( file, "%6d %5d %7d %9d %7d %10d %8d\n", machines, owner,
-			  claimed, unclaimed, matched, preempting, backfill );
+	fprintf ( file, "%6d %5d %7d %9d %7d %10d %8d %6d\n", machines, owner,
+			  claimed, unclaimed, matched, preempting, backfill, drained );
 
 #else 
-	fprintf (file, "%9d %5d %7d %9d %7d %10d\n", machines, owner, claimed,
-					unclaimed, matched, preempting);
+	fprintf (file, "%9d %5d %7d %9d %7d %10d %6d\n", machines, owner, claimed,
+					unclaimed, matched, preempting, drained);
 #endif /* HAVE_BACKFILL */
 }
 
@@ -393,12 +403,12 @@ void StartdStateTotal::
 displayHeader(FILE *file)
 {
 #if HAVE_BACKFILL
-	fprintf (file, "%6.6s %5.5s %9.9s %7.7s %10.10s %7.7s %8.8s\n",
-					"Total", "Owner", "Unclaimed", "Claimed", 
-					"Preempting", "Matched", "Backfill");
+	fprintf (file, "%6.6s %5.5s %9.9s %7.7s %10.10s %7.7s %8.8s %6.6s\n",
+					"Total", "Owner", "Unclaimed", "Claimed",
+					"Preempting", "Matched", "Backfill", "Drain");
 #else
-	fprintf( file, "%10.10s %5.5s %9.9s %7.7s %10.10s %7.7s\n", "Machines", 
-				"Owner", "Unclaimed", "Claimed", "Preempting", "Matched" );
+	fprintf( file, "%10.10s %5.5s %9.9s %7.7s %10.10s %7.7s %6.6s\n", "Machines",
+				"Owner", "Unclaimed", "Claimed", "Preempting", "Matched", "Drain" );
 #endif /* HAVE_BACKFILL */
 }
 
@@ -407,11 +417,11 @@ void StartdStateTotal::
 displayInfo( FILE *file, int )
 {
 #if HAVE_BACKFILL
-	fprintf( file, "%6d %5d %9d %7d %10d %7d %8d\n", machines, owner, 
-			 unclaimed, claimed, preempt, matched, backfill );
+	fprintf( file, "%6d %5d %9d %7d %10d %7d %8d %6d\n", machines, owner, 
+			 unclaimed, claimed, preempt, matched, backfill, drained );
 #else
-	fprintf( file, "%10d %5d %9d %7d %10d %7d\n", machines, owner, 
-			 unclaimed, claimed, preempt, matched );
+	fprintf( file, "%10d %5d %9d %7d %10d %7d %6d\n", machines, owner, 
+			 unclaimed, claimed, preempt, matched, drained );
 #endif /* HAVE_BACKFILL */
 }
 
@@ -612,14 +622,14 @@ update (ClassAd *ad)
 void ScheddSubmittorTotal::
 displayHeader(FILE *file)
 {
-	fprintf (file, "%18s %18s %18s\n", "RunningJobs", "IdleJobs", "HeldJobs");
+	fprintf (file, "%11s %10s %10s\n", "RunningJobs", "IdleJobs", "HeldJobs");
 }
 
 
 void ScheddSubmittorTotal::
 displayInfo (FILE *file, int)
 {
-	fprintf (file, "%18d %18d %18d\n", runningJobs, idleJobs, heldJobs);
+	fprintf (file, "%11d %10d %10d\n", runningJobs, idleJobs, heldJobs);
 }
 
 
@@ -689,7 +699,7 @@ makeTotalObject (ppOption ppo)
 		case PP_QUILL_NORMAL:		ct = new QuillNormalTotal; break;
 #endif /* HAVE_EXT_POSTGRESQL */
 
-		case PP_SCHEDD_SUBMITTORS:	ct = new ScheddSubmittorTotal; break;
+		case PP_SUBMITTER_NORMAL:	ct = new ScheddSubmittorTotal; break;
 		case PP_CKPT_SRVR_NORMAL:	ct = new CkptSrvrNormalTotal; break;
 
 		default:
@@ -725,7 +735,7 @@ makeKey (MyString &key, ClassAd *ad, ppOption ppo)
 			key = buf;
 			return 1;
 
-		case PP_SCHEDD_SUBMITTORS:
+		case PP_SUBMITTER_NORMAL:
 			if (!ad->LookupString(ATTR_NAME, p1, sizeof(p1))) return 0;
 			key = p1;
 			return 1;

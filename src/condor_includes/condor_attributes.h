@@ -373,6 +373,7 @@
 #define ATTR_JOB_SANDBOX_JOBAD  "DropJobAdInSandbox"
 #define ATTR_JOB_SUBMISSION  "Submission"
 #define ATTR_JOB_SUBMISSION_ID  "SubmissionId"
+#define ATTR_JOB_BATCH_NAME "JobBatchName"
 #define ATTR_JOB_START  "JobStart"
 #define ATTR_JOB_START_DATE  "JobStartDate"
 #define ATTR_JOB_STATE  "JobState"
@@ -715,6 +716,7 @@
 #define ATTR_VISA_IP  "VisaIpAddr"
 #define ATTR_WOL_PORT  "WakePort"
 #define ATTR_WANT_CHECKPOINT  "WantCheckpoint"
+#define ATTR_WANT_FT_ON_CHECKPOINT "WantFTOnCheckpoint"
 #define ATTR_WANT_CLAIMING  "WantClaiming"
 #define ATTR_WANT_IO_PROXY  "WantIOProxy"
 #define ATTR_WANT_REMOTE_UPDATES "WantRemoteUpdates"
@@ -864,6 +866,10 @@ extern const char ATTR_SEC_AUTHENTICATED_USER [];
 #define ATTR_LAST_CHECKPOINT_PLATFORM  "LastCheckpointPlatform"
 #define ATTR_IS_VALID_CHECKPOINT_PLATFORM  "IsValidCheckpointPlatform"
 
+#define ATTR_CHECKPOINT_EXIT_CODE  "CheckpointExitCode"
+#define ATTR_CHECKPOINT_EXIT_SIGNAL  "CheckpointExitSignal"
+#define ATTR_CHECKPOINT_EXIT_BY_SIGNAL  "CheckpointExitBySignal"
+
 #define ATTR_WITHIN_RESOURCE_LIMITS  "WithinResourceLimits"
 
 #define ATTR_HAD_IS_ACTIVE  "HadIsActive"
@@ -914,6 +920,10 @@ extern const char ATTR_SEC_AUTHENTICATED_USER [];
 
 #define ATTR_WEIGHTED_IDLE_JOBS "WeightedIdleJobs"
 #define ATTR_WEIGHTED_RUNNING_JOBS "WeightedRunningJobs"
+#define ATTR_IDLE_LOCAL_JOBS "LocalJobsIdle"
+#define ATTR_RUNNING_LOCAL_JOBS "LocalJobsRunning"
+#define ATTR_IDLE_SCHEDULER_JOBS "SchedulerJobsIdle"
+#define ATTR_RUNNING_SCHEDULER_JOBS "SchedulerJobsRunning"
 
 //************* Added for EC2 Jobs ***************************//
 #define ATTR_EC2_ACCESS_KEY_ID  "EC2AccessKeyId"

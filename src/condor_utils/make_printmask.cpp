@@ -405,6 +405,8 @@ int SetAttrListPrintMaskFromStream (
 						const CustomFormatFnTableItem * pcffi = FnTable.find_match(toke);
 						if (pcffi) {
 							cust = pcffi->cust;
+							fmt = pcffi->printfFmt;
+							if (fmt) fmt = mask.store(fmt);
 							//cust_type = pcffi->cust;
 							const char * pszz = pcffi->extra_attribs;
 							if (pszz) {
@@ -425,9 +427,12 @@ int SetAttrListPrintMaskFromStream (
 				case kw_OR: {
 					if (toke.next()) {
 						std::string val; toke.copy_token(val);
-						if (val == "?") { opts |= AltQuestion; }
-						else if (val == "??") { opts |= (AltQuestion | AltWide); }
-						else {
+						const char alt_chars[] = " ?*.-_#0";
+						if (val.length() > 0 && strchr(alt_chars, val[0])) {
+							int ix = (int)(strchr(alt_chars, val[0]) - &alt_chars[0]);
+							opts |= (ix*AltQuestion);
+							if (val.length() > 1 && val[0] == val[1]) { opts |= AltWide; }
+						} else {
 							formatstr_cat(error_message, "Unknown argument %s for OR\n", val.c_str());
 						}
 					} else {
@@ -507,10 +512,12 @@ int SetAttrListPrintMaskFromStream (
 				if (width_from_label) { wid = 0 - (int)strlen(lbl); }
 				mask.set_heading(lbl);
 				lbl = NULL;
-				// if we get to here and there is no format, that means that
-				// a width was specified, but no custom or printf format. so we
-				// need to manufacture a printf format based on the given width.
-				if ( ! fmt) {
+				if (cust) {
+					lbl = fmt;
+				} else if ( ! fmt) {
+					// if we get to here and there is no format, that means that
+					// a width was specified, but no custom or printf format. so we
+					// need to manufacture a printf format based on the given width.
 					if ( ! wid) { fmt = def_fmt; }
 					else {
 						char tmp[40] = "%"; char *p = tmp+1;

@@ -1012,9 +1012,12 @@ Scheduler::fill_submitter_ad(ClassAd & pAd, const OwnerData & Owner, int flock_l
 	}
 
 	int JobsRunningHere = Counters.JobsRunning;
+	int WeightedJobsRunningHere = Counters.WeightedJobsRunning;
 	int JobsRunningElsewhere = Counters.JobsFlocked;
+
 	if (flock_level > 0) {
 		JobsRunningHere = Counters.JobsFlockedHere;
+		WeightedJobsRunningHere = Counters.WeightedJobsFlockedHere;
 		JobsRunningElsewhere = (Counters.JobsRunning + Counters.JobsFlocked) - Counters.JobsFlockedHere;
 	}
 
@@ -1026,13 +1029,29 @@ Scheduler::fill_submitter_ad(ClassAd & pAd, const OwnerData & Owner, int flock_l
 	if (want_dprintf)
 		dprintf (dprint_level, "Changed attribute: %s = %d\n", ATTR_IDLE_JOBS, Counters.JobsIdle);
 
-	pAd.Assign(ATTR_WEIGHTED_RUNNING_JOBS, Counters.WeightedJobsRunning);
+	pAd.Assign(ATTR_WEIGHTED_RUNNING_JOBS, WeightedJobsRunningHere);
 	if (want_dprintf)
-		dprintf (dprint_level, "Changed attribute: %s = %d\n", ATTR_WEIGHTED_RUNNING_JOBS, Counters.WeightedJobsRunning);
+		dprintf (dprint_level, "Changed attribute: %s = %d\n", ATTR_WEIGHTED_RUNNING_JOBS, WeightedJobsRunningHere);
 
 	pAd.Assign(ATTR_WEIGHTED_IDLE_JOBS, Counters.WeightedJobsIdle);
 	if (want_dprintf)
 		dprintf (dprint_level, "Changed attribute: %s = %d\n", ATTR_WEIGHTED_IDLE_JOBS, Counters.WeightedJobsIdle);
+
+	pAd.Assign(ATTR_RUNNING_LOCAL_JOBS, Counters.LocalJobsIdle);
+	if (want_dprintf)
+		dprintf (dprint_level, "Changed attribute: %s = %d\n", ATTR_RUNNING_LOCAL_JOBS, Counters.LocalJobsIdle);
+
+	pAd.Assign(ATTR_IDLE_LOCAL_JOBS, Counters.LocalJobsRunning);
+	if (want_dprintf)
+		dprintf (dprint_level, "Changed attribute: %s = %d\n", ATTR_IDLE_LOCAL_JOBS, Counters.LocalJobsRunning);
+
+	pAd.Assign(ATTR_RUNNING_SCHEDULER_JOBS, Counters.SchedulerJobsRunning);
+	if (want_dprintf)
+		dprintf (dprint_level, "Changed attribute: %s = %d\n", ATTR_RUNNING_SCHEDULER_JOBS, Counters.SchedulerJobsRunning);
+
+	pAd.Assign(ATTR_IDLE_SCHEDULER_JOBS, Counters.SchedulerJobsIdle);
+	if (want_dprintf)
+		dprintf (dprint_level, "Changed attribute: %s = %d\n", ATTR_IDLE_SCHEDULER_JOBS, Counters.SchedulerJobsIdle);
 
 	pAd.Assign(ATTR_HELD_JOBS, Counters.JobsHeld);
 	if (want_dprintf)
@@ -1219,23 +1238,7 @@ Scheduler::count_jobs()
 				// Sum up the # of cpus claimed by this user and advertise it as
 				// WeightedJobsRunning. 
 
-			int job_weight = 1;
-			if (m_use_slot_weights && slotWeight && rec->my_match_ad) {
-					// if the schedd slot weight expression is set and parses,
-					// evaluate it here
-				classad::Value result;
-				int rval = EvalExprTree( slotWeight, rec->my_match_ad, NULL, result );
-				if( !rval || !result.IsNumber(job_weight)) {
-					job_weight = 1;
-				}
-			} else {
-					// slot weight isn't set, fall back to assuming cpus
-				if (rec->my_match_ad) {
-					if(0 == rec->my_match_ad->LookupInteger(ATTR_CPUS, job_weight)) {
-						job_weight = 1; // or fall back to one if CPUS isn't in the startds
-					}
-				}
-			}
+			int job_weight = calcSlotWeight(rec->my_match_ad);
 			
 			Owner->num.WeightedJobsRunning += job_weight;
 			Owner->num.JobsRunning++;
@@ -1482,6 +1485,7 @@ Scheduler::count_jobs()
 			for (OwnerDataMap::iterator it = Owners.begin(); it != Owners.end(); ++it) {
 				OwnerData & Owner = it->second;
 				Owner.num.JobsFlockedHere = 0;
+				Owner.num.WeightedJobsFlockedHere = 0;
 			}
 			matches->startIterations();
 			match_rec *mRec;
@@ -1493,6 +1497,8 @@ Scheduler::count_jobs()
 				if (mRec->shadowRec && mRec->pool &&
 					!strcmp(mRec->pool, flock_neg->pool())) {
 					Owner->num.JobsFlockedHere++;
+
+					Owner->num.WeightedJobsFlockedHere += calcSlotWeight(mRec->my_match_ad);
 				}
 			}
 
@@ -1550,6 +1556,10 @@ Scheduler::count_jobs()
 	pAd.Assign(ATTR_HELD_JOBS, 0);
 	pAd.Assign(ATTR_WEIGHTED_RUNNING_JOBS, 0);
 	pAd.Assign(ATTR_WEIGHTED_IDLE_JOBS, 0);
+	pAd.Assign(ATTR_IDLE_LOCAL_JOBS, 0);
+	pAd.Assign(ATTR_RUNNING_LOCAL_JOBS, 0);
+	pAd.Assign(ATTR_IDLE_SCHEDULER_JOBS, 0);
+	pAd.Assign(ATTR_RUNNING_SCHEDULER_JOBS, 0);
 
 	// clear owner stats in case we have stale ones in pAd
 	// PRAGMA_REMIND("tj: perhaps we should be continuing to publish Owner status until the owners decay?")
@@ -2049,13 +2059,105 @@ int Scheduler::command_query_job_ads(int, Stream* stream)
 		return command_query_job_aggregates(queryAd, stream);
 	}
 
-	classad::ExprTree *requirements = queryAd.Lookup(ATTR_REQUIREMENTS);
+	// REMOVE this code once we have working user detection
+	//
+	int dpf_level = D_ALWAYS; // D_COMMAND | D_FULLDEBUG
+	if (IsDebugCatAndVerbosity(dpf_level)) {
+		ReliSock* rsock = (ReliSock*)stream;
+		const char * p0wn = rsock->getOwner();
+		dprintf(dpf_level, "QUERY_JOB_ADS detected owner = %s\n", p0wn ? p0wn : "<null>");
+	}
+
+	// If the query request that only the querier's jobs be returned
+	// we have to figure out who the quierier is and add a clause to the requirements expression
+	classad::ExprTree *my_jobs_expr = NULL;
+	bool was_my_jobs = false;
+	if (param_boolean("CONDOR_Q_ONLY_MY_JOBS", true)) {
+		my_jobs_expr = queryAd.Lookup("MyJobs");
+		was_my_jobs = my_jobs_expr != NULL;
+	}
+	if (my_jobs_expr) {
+		std::string owner;
+		//PRAGMA_REMIND("figure out username of invoker, and create a my_jobs_expr for them.")
+		ReliSock* rsock = (ReliSock*)stream;
+		const char * p0wn = rsock->getOwner();
+		if (p0wn && MATCH == strcasecmp(p0wn, "unauthenticated")) p0wn = NULL;
+
+		long long val;
+		// if MyJobs is a literal true/false, then we are being asked to either NOT show
+		// just the users jobs, or figure out who the user is and show just their jobs.
+		if (ExprTreeIsLiteralNumber(my_jobs_expr, val)) {
+			if (val) {
+				// MyJobs is just a boolean equivalent TRUE or FALSE, so it's up to the schedd to choose
+				// the appropriate ownername.
+				if (p0wn) owner = p0wn;
+			} else {
+				// false means we don't want just this owners jobs. set my_jobs_expr to NULL to signal that.
+				my_jobs_expr = NULL;
+			}
+		} else {
+			// if my_jobs_expr is not literal true/valse, then we assume it is Owner==Me
+			// and that ME is also an attribute in the query ad. With Me being a guess as
+			// to the correct owner.  We will use the suggested value of Me unless we can
+			// determine a better value. 
+			classad::ExprTree * me_expr = queryAd.Lookup("Me");
+			if (me_expr && ExprTreeIsLiteralString(me_expr, owner)) {
+				// owner is set, buf if owner is a queue superuser, then we still want to show all jobs.
+				if (isQueueSuperUser(owner.c_str())) {
+					my_jobs_expr = NULL; 
+				}
+			} else {
+				my_jobs_expr = NULL;
+			}
+			if (p0wn) owner = p0wn;
+		}
+
+		// at this point owner should be set if my_jobs_expr is non-null
+		// and that means we can construct the correct my_jobs_expr contraint expression
+		if (my_jobs_expr) {
+			MyString sub_expr;
+			sub_expr.formatstr("(owner == \"%s\")", owner.c_str());
+			classad::ClassAdParser parser;
+			my_jobs_expr = parser.ParseExpression(sub_expr.c_str());
+		}
+	}
+
+	// at this point, my_jobs_expr is either NULL, or an ExprTree that we are responsible for deleting
+
+	classad::ExprTree *requirements_in = queryAd.Lookup(ATTR_REQUIREMENTS);
+	classad::ExprTree *requirements = my_jobs_expr;
+#if 1 // new for 8.5.3, use my_jobs_expr, or requirements (or both if both are set)
+	if (requirements_in) {
+		bool bval = false;
+		requirements_in = SkipExprParens(requirements_in);
+		if (IsDebugCatAndVerbosity(dpf_level)) {
+			dprintf(dpf_level, "QUERY_JOB_ADS %d formal requirements without excess parens: %s\n", was_my_jobs, ExprTreeToString(requirements_in));
+		}
+		if ( ! requirements) {
+			requirements = requirements_in->Copy();
+		} else if ( ! ExprTreeIsLiteralBool(requirements_in, bval) || bval) {
+			// if we have both requirements, and requirements_in, and the requirements_in is not a trivial 'true' 
+			// we need to join them both requirements with a logical && op.
+			requirements = JoinExprTreeCopiesWithOp(classad::Operation::LOGICAL_AND_OP, my_jobs_expr, requirements_in);
+			delete my_jobs_expr; my_jobs_expr = NULL;
+		}
+	} else if ( ! requirements) {
+		classad::Value val; val.SetBooleanValue(true);
+		requirements = classad::Literal::MakeLiteral(val);
+	}
+	if ( ! requirements) return sendJobErrorAd(stream, 1, "Failed to create requirements expression");
+	if (IsDebugCatAndVerbosity(dpf_level)) {
+		dprintf(dpf_level, "QUERY_JOB_ADS %d effective requirements: %s\n", was_my_jobs, ExprTreeToString(requirements));
+	}
+	classad_shared_ptr<classad::ExprTree> requirements_ptr(requirements);
+#else
 	if (!requirements) {
 		classad::Value val; val.SetBooleanValue(true);
 		requirements = classad::Literal::MakeLiteral(val);
 		if (!requirements) return sendJobErrorAd(stream, 1, "Failed to create default requirements");
 	}
 	classad_shared_ptr<classad::ExprTree> requirements_ptr(requirements->Copy());
+#endif
 
 	int resultLimit=-1;
 	if (!queryAd.EvaluateAttrInt(ATTR_LIMIT_RESULTS, resultLimit)) {
@@ -2303,6 +2405,30 @@ clear_autocluster_id(JobQueueJob *job, const JOB_ID_KEY & /*jid*/, void *)
 	return 0;
 }
 
+	// This function, given a job, calculates the "weight", or cost
+	// of the slot for accounting purposes.  Usually the # of cpus
+int 
+Scheduler::calcSlotWeight(ClassAd *machine) {
+	int job_weight = 1;
+	if (m_use_slot_weights && slotWeight && machine) {
+			// if the schedd slot weight expression is set and parses,
+			// evaluate it here
+		classad::Value result;
+		int rval = EvalExprTree( slotWeight, machine, NULL, result );
+		if( !rval || !result.IsNumber(job_weight)) {
+			job_weight = 1;
+		}
+	} else {
+			// slot weight isn't set, fall back to assuming cpus
+		if (machine) {
+			if(0 == machine->LookupInteger(ATTR_CPUS, job_weight)) {
+				job_weight = 1; // or fall back to one if CPUS isn't in the startds
+			}
+		}
+	}
+	
+	return job_weight;
+}
 
 int
 count_a_job(JobQueueJob* job, const JOB_ID_KEY& /*jid*/, void*)
@@ -2470,23 +2596,27 @@ count_a_job(JobQueueJob* job, const JOB_ID_KEY& /*jid*/, void*)
 	Counters->JobsRecentlyAdded = 0;
 
 	if ( (universe != CONDOR_UNIVERSE_GRID) &&	// handle Globus below...
-		 (!service_this_universe(universe,job))  ) 
+		 (!service_this_universe(universe,job))  )
 	{
 			// Deal with all the Universes which we do not service, expect
 			// for Globus, which we deal with below.
-		if( universe == CONDOR_UNIVERSE_SCHEDULER ) 
+		if (universe == CONDOR_UNIVERSE_SCHEDULER)
 		{
 			// Count REMOVED or HELD jobs that are in the process of being
 			// killed. cur_hosts tells us which these are.
 			scheduler.SchedUniverseJobsRunning += cur_hosts;
 			scheduler.SchedUniverseJobsIdle += (max_hosts - cur_hosts);
+			Counters->SchedulerJobsRunning += cur_hosts;
+			Counters->SchedulerJobsIdle += (max_hosts - cur_hosts);
 		}
-		if( universe == CONDOR_UNIVERSE_LOCAL ) 
+		if (universe == CONDOR_UNIVERSE_LOCAL)
 		{
 			// Count REMOVED or HELD jobs that are in the process of being
 			// killed. cur_hosts tells us which these are.
 			scheduler.LocalUniverseJobsRunning += cur_hosts;
 			scheduler.LocalUniverseJobsIdle += (max_hosts - cur_hosts);
+			Counters->LocalJobsRunning += cur_hosts;
+			Counters->LocalJobsIdle += (max_hosts - cur_hosts);
 		}
 			// We want to record the cluster id of all idle MPI and parallel
 		    // jobs
@@ -2589,8 +2719,8 @@ count_a_job(JobQueueJob* job, const JOB_ID_KEY& /*jid*/, void*)
 		if ((scheduler.m_use_slot_weights) && (cur_hosts == 0) && scheduler.slotWeightMapAd) {
 
 				// if we're biasing idle jobs by SLOT_WEIGHT, eval that here
-			classad::Value result;
 			int job_weight;
+			classad::Value result;
 			int rval = EvalExprTree( scheduler.slotWeight, scheduler.slotWeightMapAd, job, result );
 
 			if( !rval || !result.IsNumber(job_weight)) {

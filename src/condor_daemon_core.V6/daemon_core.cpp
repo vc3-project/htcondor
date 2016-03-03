@@ -244,7 +244,8 @@ DaemonCore::DaemonCore(int PidSize, int ComSize,int SigSize,
 	sigTable(10),
 	reapTable(4),
 	t(TimerManager::GetTimerManager()),
-	m_dirty_command_sock_sinfuls(true)
+	m_dirty_command_sock_sinfuls(true),
+	m_advertise_ipv4_first(false)
 {
 
 	if(ComSize < 0 || SigSize < 0 || SocSize < 0 || PidSize < 0 || ReapSize < 0)
@@ -327,6 +328,13 @@ DaemonCore::DaemonCore(int PidSize, int ComSize,int SigSize,
 #ifdef HAVE_EXT_GSOAP
 	soap_ssl_sock = -1;
 #endif
+
+	// See the comment in the header.  This can't be a reconfigure setting
+	// because everybody's sinfuls are derived from the shared port's sinful
+	// (when shared port is enabled, which it is by default), and the shared
+	// port's sinful (and ad file on disk) isn't necessarily updated before
+	// anyone else's, the master particularly included.
+	m_advertise_ipv4_first = param_boolean( "ADVERTISE_IPV4_FIRST", false );
 
 	m_dirty_sinful = true;
 
@@ -1018,7 +1026,7 @@ int DaemonCore::Register_Command(int command, const char* command_descrip,
 		if ( comTable[j].num == command ) {
 			MyString msg;
 			msg.formatstr("DaemonCore: Same command registered twice (id=%d)", command);
-			EXCEPT(msg.c_str());
+			EXCEPT("%s",msg.c_str());
 		}
 	}
 	if ( i == -1 ) {
@@ -1124,6 +1132,20 @@ char const * DaemonCore::InfoCommandSinfulString(int pid)
 	}
 }
 
+
+void addIPToSinfuls(	condor_sockaddr & sa, condor_sockaddr & fa,
+						Sinful & m_sinful, Sinful & sPublic, Sinful & sPrivate ) {
+	if( sa.is_valid() ) {
+		if( fa.is_valid() && fa.get_protocol() == sa.get_protocol() ) {
+			fa.set_port( sa.get_port() );
+			m_sinful.addAddrToAddrs( fa );
+		} else {
+			m_sinful.addAddrToAddrs( sa );
+		}
+		sPublic.addAddrToAddrs( sa );
+		sPrivate.addAddrToAddrs( sa );
+	}
+}
 
 // NOTE: InfoCommandSinfulStringMyself always returns a pointer to a _static_ buffer!
 // This means you'd better copy or strdup the result if you expect it to never
@@ -1356,25 +1378,13 @@ DaemonCore::InfoCommandSinfulStringMyself(bool usePrivateAddress)
 		ASSERT( sa6.is_valid() || sa4.is_valid() );
 		Sinful sPublic( sinful_public );
 		Sinful sPrivate( sinful_private != NULL ? sinful_private : "" );
-		if( sa6.is_valid() ) {
-			if( fa.is_valid() && fa.is_ipv6() ) {
-				fa.set_port( sa6.get_port() );
-				m_sinful.addAddrToAddrs( fa );
-			} else {
-				m_sinful.addAddrToAddrs( sa6 );
-			}
-			sPublic.addAddrToAddrs( sa6 );
-			sPrivate.addAddrToAddrs( sa6 );
-		}
-		if( sa4.is_valid() ) {
-			if( fa.is_valid() && fa.is_ipv4() ) {
-				fa.set_port( sa4.get_port() );
-				m_sinful.addAddrToAddrs( fa );
-			} else {
-				m_sinful.addAddrToAddrs( sa4 );
-			}
-			sPublic.addAddrToAddrs( sa4 );
-			sPrivate.addAddrToAddrs( sa4 );
+
+		if( m_advertise_ipv4_first ) {
+			addIPToSinfuls( sa4, fa, m_sinful, sPublic, sPrivate );
+			addIPToSinfuls( sa6, fa, m_sinful, sPublic, sPrivate );
+		} else {
+			addIPToSinfuls( sa6, fa, m_sinful, sPublic, sPrivate );
+			addIPToSinfuls( sa4, fa, m_sinful, sPublic, sPrivate );
 		}
 
 		free( sinful_public );
@@ -9974,8 +9984,8 @@ int
 BindAnyLocalCommandPort(ReliSock *rsock, SafeSock *ssock)
 {
 	condor_protocol proto;
-	if(param_boolean("ENABLE_IPV4", true)) { proto = CP_IPV4; }
-	else if(param_boolean("ENABLE_IPV6", true)) { proto = CP_IPV6; }
+	if(! param_false( "ENABLE_IPV4" )) { proto = CP_IPV4; }
+	else if(! param_false( "ENABLE_IPV6" )) { proto = CP_IPV6; }
 	else {
 		dprintf(D_ALWAYS, "Error: No protocols are enabled, unable to BindAnyLocalCommandPort!\n");
 		return FALSE;
@@ -10232,12 +10242,27 @@ InitCommandSockets(int tcp_port, int udp_port, DaemonCore::SockPairVec & socks, 
 
 	DaemonCore::SockPairVec new_socks;
 
+	// We validated the ENABLE_* params earlier, in init_network_interfaces().
+	bool tryIPv4 = ! param_false( "ENABLE_IPV4" );
+	if( tryIPv4 && ! param_defined( "IPV4_ADDRESS" ) ) {
+		tryIPv4 = false;
+	}
+
+	bool tryIPv6 = ! param_false( "ENABLE_IPV6" );
+	if( tryIPv6 && ! param_defined( "IPV6_ADDRESS" ) ) {
+		tryIPv6 = false;
+	}
+
+	if( (!tryIPv4) && (!tryIPv6) ) {
+		EXCEPT( "Unwilling or unable to try IPv4 or IPv6.  Check the settings ENABLE_IPV4, ENABLE_IPV6, and NETWORK_INTERFACE.\n" );
+	}
+
 	// Arbitrary constant, borrowed from bindAnyCommandPort().
 	const int MAX_RETRIES = 1000;
 	int tries;
 	for(tries = 1; tries <= MAX_RETRIES; tries++) {
 
-		if(param_boolean("ENABLE_IPV4", true)) {
+		if( tryIPv4 ) {
 			DaemonCore::SockPair sock_pair;
 			if( ! InitCommandSocket(CP_IPV4, tcp_port, udp_port, sock_pair, want_udp, fatal)) {
 				dprintf(D_ALWAYS | D_FAILURE, "Warning: Failed to create IPv4 command socket for ports %d/%d%s.\n", tcp_port, udp_port, want_udp?"":"no UDP");
@@ -10252,7 +10277,7 @@ InitCommandSockets(int tcp_port, int udp_port, DaemonCore::SockPairVec & socks, 
 		// can include both protocols' address(es).
 		int targetTCPPort = tcp_port;
 		int targetUDPPort = udp_port;
-		if( param_boolean( "ENABLE_IPV4", true ) && param_boolean("ENABLE_IPV6", true ) ) {
+		if( tryIPv4 && tryIPv6 ) {
 			// If tcp_port and udp_port are both static, we don't have to do anything.
 			if( tcp_port <= 1 || udp_port <= 1 ) {
 				// Determine which port IPv4 got, and try to get that port for IPv6.
@@ -10264,12 +10289,12 @@ InitCommandSockets(int tcp_port, int udp_port, DaemonCore::SockPairVec & socks, 
 			}
 		}
 
-		if(param_boolean("ENABLE_IPV6", true)) {
+		if( tryIPv6 ) {
 			DaemonCore::SockPair sock_pair;
 			// We emulate fatal, below, because it's only a fatal error
 			// to fail to match an IPv4 port number if it was static.
 			if( ! InitCommandSocket(CP_IPV6, targetTCPPort, targetUDPPort, sock_pair, want_udp, false)) {
-				// TODO: If we're asking for a dynamically chosen TCP port 
+				// TODO: If we're asking for a dynamically chosen TCP port
 				// (targetTCPPort <= 1) but a statically chosen UDP port
 				// (targetUDPPort > 1), and the reason InitCommandSocket
 				// fails is that it couldn't get the UDP port, then we
@@ -10296,7 +10321,7 @@ InitCommandSockets(int tcp_port, int udp_port, DaemonCore::SockPairVec & socks, 
 
 					std::string message;
 					formatstr( message, "Warning: Failed to create IPv6 command socket for ports %d/%d%s", tcp_port, udp_port, want_udp ? "" : "no UDP" );
-					if( fatal ) { EXCEPT( message.c_str() ); }
+					if( fatal ) { EXCEPT( "%s", message.c_str() ); }
 					dprintf(D_ALWAYS | D_FAILURE, "%s\n", message.c_str() );
 					return false;
 				}

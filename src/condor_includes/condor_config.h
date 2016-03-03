@@ -156,6 +156,12 @@ typedef struct macro_set {
 	bool string_is_double_param(const char * string, double& result, ClassAd *me = NULL, ClassAd *target = NULL, const char * name=NULL, int* err_reason=NULL);
 	bool string_is_long_param(const char * string, long long& result, ClassAd *me = NULL, ClassAd *target = NULL, const char * name=NULL, int* err_reason=NULL);
 
+	// A convenience function for use with trinary parameters.
+	bool param_true( const char * name );
+
+	// A convenience function for use with trinary parameters.
+	bool param_false( const char * name );
+
 	const char * param_get_location(const MACRO_META * pmet, MyString & value);
 
 	const char * param_get_info(const char * name,
@@ -193,6 +199,12 @@ typedef struct macro_set {
 
 	/* A convenience function that calls param() then inserts items from the value into the given StringList if they are not already there */
 	bool param_and_insert_unique_items(const char * param_name, StringList & items, bool case_sensitive=false);
+
+	/*  A convenience function that calls param() then inserts items from the value
+		into the given classad:References set.  Useful whenever a param knob contains
+		a string list of ClassAd attribute names, e.g. IMMUTABLE_JOB_ATTRS.
+		Return true if given param name was found, false if not. */
+	bool param_and_insert_attrs(const char * param_name, classad::References & attrs);
 
 	/* Call this after loading the config files to see if the given user has access to all of the files
 	   Used when running as root to verfiy that the config files will still be accessible after we switch
@@ -464,7 +476,6 @@ BEGIN_C_DECLS
 void condor_auth_config(int is_daemon);
 
 END_C_DECLS
-
 
 #endif /* CONFIG_H */
 

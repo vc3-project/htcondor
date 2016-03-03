@@ -6423,6 +6423,15 @@ MAX_JOBS_RUNNING	= \
   It instead handles the requests in a non-blocking way.
   The default value is \Expr{True}.
 
+\label{param:CondorQOnlyMyJobs}
+\item[\Macro{CONDOR\_Q\_ONLY\_MY\_JOBS}]
+  A boolean value that, when \Expr{True},
+  causes \Condor{q} to request that only the current user's jobs be queried
+  unless the current user is a queue superuser.  It also causes the
+  \Condor{schedd} to honor that request.
+  The default value is \Expr{True}. A value of \Expr{False} in either \Condor{q} or
+  the \Condor{schedd} will result in the old behavior of querying all jobs.
+
 \label{param:ScheddInterval}
 \item[\Macro{SCHEDD\_INTERVAL}]
   This macro determines the maximum interval for both how often the
@@ -7354,10 +7363,36 @@ SYSTEM_PERIODIC_REMOVE = \
 \item[\Macro{CHOWN\_JOB\_SPOOL\_FILES}]
   Prior to HTCondor 8.5.0 on unix, the \condor{schedd} would chown job
   files in the SPOOL directory between the condor account and the
-  account of the job sbumitter.
+  account of the job submitter.
   Now, these job files are always owned by the job submitter by default.
   To restore the older behavior, set this parameter to \Expr{True}.
   The default value is \Expr{False}.
+
+\label{param:ImmutableJobAttrs}
+\item[\Macro{IMMUTABLE\_JOB\_ATTRS}]
+  A comma and/or space separated list of attributes provided by the
+  administrator that cannot be changed, once they have committed values.
+  No attributes are in this list by default.
+
+\label{param:SystemImmutableJobAttrs}
+\item[\Macro{SYSTEM\_IMMUTABLE\_JOB\_ATTRS}]
+  A predefined comma and/or space separated list of attributes that
+  cannot be changed, once they have committed values.
+  The hard-coded value is:
+  \Attr{Owner} \Attr{ClusterId} \Attr{ProcId} \Attr{MyType} \Attr{TargetType}.
+
+\label{param:ProtectedJobAttrs}
+\item[\Macro{PROTECTED\_JOB\_ATTRS}]
+  A comma and/or space separated list of attributes provided by the
+  administrator that can only be altered by the queue super-user,
+  once they have committed values.
+  No attributes are in this list by default.
+
+\label{param:SystemProtectedJobAttrs}
+\item[\Macro{SYSTEM\_PROTECTED\_JOB\_ATTRS}]
+  A predefined comma and/or space separated list of attributes that can only
+  be altered by the queue super-user, once they have committed values.
+  The hard-code value is empty.
 
 \end{description}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -9641,6 +9676,11 @@ These macros affect the \Condor{gridmanager}.
   which a pending GAHP command should time out. 
   The default is 5 minutes (300 seconds).
 
+\label{param:GridmanagerGahpResponseTimeout}
+\item[\Macro{GRIDMANAGER\_GAHP\_RESPONSE\_TIMEOUT}]
+  The \Condor{gridmanager} will assume a GAHP is hung if this many
+  seconds pass without a response.  The default is 20.
+
 \label{param:GridmanagerMaxPendingRequests}
 \item[\Macro{GRIDMANAGER\_MAX\_PENDING\_REQUESTS}]
   The maximum number of GAHP
@@ -10573,21 +10613,15 @@ in section~\ref{sec:DAG-configuration}.
 \label{param:DAGManLogOnNfsIsError}
 \item[\Macro{DAGMAN\_LOG\_ON\_NFS\_IS\_ERROR}]
   A boolean value that controls whether \Condor{dagman} prohibits
-  node job submit description files with job event log files on NFS.
-  This value is ignored if \MacroNI{CREATE\_LOCKS\_ON\_LOCAL\_DISK} is 
-  \Expr{True} and
-  \MacroNI{ENABLE\_USERLOG\_LOCKING} is \Expr{True}.
-  If a DAG references such a submit description file and
-  \MacroNI{DAGMAN\_LOG\_ON\_NFS\_IS\_ERROR} is \Expr{True},
+  a DAG workflow log from being on an NFS file system.
+  This value is ignored if \MacroNI{CREATE\_LOCKS\_ON\_LOCAL\_DISK} 
+  and \MacroNI{ENABLE\_USERLOG\_LOCKING} are both \Expr{True}.
+  If a DAG uses such a workflow log file file and
+  \MacroNI{DAGMAN\_LOG\_ON\_NFS\_IS\_ERROR} is \Expr{True}
+  (and not ignored),
   the DAG will abort during the initialization process. 
-  If \MacroNI{DAGMAN\_LOG\_ON\_NFS\_IS\_ERROR} is \Expr{False}, a warning
-  will be issued, but the DAG will still be submitted.
-  It is \emph{strongly}
-  recommended that \MacroNI{DAGMAN\_LOG\_ON\_NFS\_IS\_ERROR}
-  remain set to the default value, because running a DAG with node job
-  log files on NFS will often cause errors.
   If not defined, \MacroNI{DAGMAN\_LOG\_ON\_NFS\_IS\_ERROR} defaults to
-  \Expr{True}.
+  \Expr{False}.
 
 \label{param:DAGManAbortDuplicates}
 \item[\Macro{DAGMAN\_ABORT\_DUPLICATES}]
