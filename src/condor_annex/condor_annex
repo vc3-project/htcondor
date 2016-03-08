@@ -626,6 +626,7 @@ sub createStack {
 		'--template-url', "https://s3.amazonaws.com/condor-annex-${region}/template-${VERSION}",
 		'--stack-name', $stackName,
     	'--capabilities', 'CAPABILITY_IAM',
+    	'--tags', "Key=ProjectID,Value=${projectID}",
 		'--parameters', $parameters );
 
 	my( $rv, $log ) = capture( @command );
