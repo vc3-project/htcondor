@@ -481,6 +481,7 @@ exit( 0 );
 
 sub capture {
 	my @command = @_;
+	# print( "COMMAND: " . join( ' ', @command ) . "\n" );
 
 	my $childFD;
 	my $childPID = open( $childFD, "-|" );
@@ -507,6 +508,7 @@ sub capture {
 
 sub captureCommand {
 	my @command = @_;
+	# print( "COMMAND: " . join( ' ', @command ) . "\n" );
 
 	my $childFD;
 	my $childPID = open( $childFD, '-|', @command );
@@ -580,23 +582,20 @@ sub createStack {
             {
                 "ParameterKey" : "VPCSubnets",
                 "ParameterValue" : "' . $subnets . '"
-            }
-        ';
+            }';
 	if( $createdS3Bucket ) {
 		$parameters .= ',
 			{
 				"ParameterKey" : "S3DeleteBucket",
 				"ParameterValue" : "' . $s3Bucket . '"
-			}
-		';
+			}';
 	}
 	if( defined( $configLocation ) ) {
 		$parameters .= ',
 			{
 				"ParameterKey" : "S3ConfigFile",
 				"ParameterValue" : "' . $configLocation . '"
-			}
-		';
+			}';
 	}
 	for( my $i = 0; $i < scalar( @{$instanceTypes} ); ++$i ) {
 		$parameters .= ',
@@ -613,8 +612,7 @@ sub createStack {
         	{
                 "ParameterKey" : "SpotPrice' . ($i + 1) . '",
                 "ParameterValue" : "' . $spotPrices->[ $i ] . '"
-        	}
-        ';
+        	}' . "\n";
         } else {
         	$parameters .= "\n";
         }

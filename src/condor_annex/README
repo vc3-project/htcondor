@@ -120,6 +120,9 @@ FEATURE REQUESTS
 ? [2016-02-18]  Specify propogated user tag(s) for the stack.  (Currently
   not propogated to EBS volumes.)  Unclear how or if possible to tag the
   whole stack.
+* [2016-03-11]  In particular, it looks like a tagged autoScaling Group
+  or Spot Fleet that propogates tags to its instances doesn't tag the
+  Spot instance requests by which it acquires those instances.
 
 NOTES
 
