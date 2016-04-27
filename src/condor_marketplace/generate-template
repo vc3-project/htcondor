@@ -1,0 +1,64 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+use JSON;
+
+my( $prettyPrint );
+GetOptions(
+	'pretty-print'	=> \$prettyPrint
+);
+
+my $template;
+$template->{ AWSTemplateFormatVersion } = "2010-09-09";
+$template->{ Description } = "HTCondor Marketplace v1";
+
+$template->{ Mappings }->{ RegionToDefaultAMI } = {
+	"us-east-1" => { DefaultAMI => "ami-56aeb43c" }
+};
+
+$template->{ Parameters }->{ KeyName } = { Type => "AWS::EC2::KeyPair::KeyName" };
+$template->{ Parameters }->{ VPC } = { Type => "AWS::EC2::VPC::Id" };
+$template->{ Parameters }->{ Subnet } = { Type => "AWS::EC2::Subnet::Id" };
+
+$template->{ Resources }->{ SecurityGroup } = {
+	Type => "AWS::EC2::SecurityGroup",
+	Properties => {
+		VpcId => { Ref => "VPC" },
+		GroupDescription => "SSH",
+		SecurityGroupIngress => [
+			{
+				IpProtocol => "tcp",
+				FromPort => 22,
+				ToPort => 22,
+				CidrIp => "0.0.0.0/0"
+			}
+		]
+	}
+};
+
+my $userData = "#!/bin/bash
+	echo FOO > /tmp/foo
+	";
+$template->{ Resources }->{ CentralManager } = {
+	Type => "AWS::EC2::Instance",
+	Properties => {
+		ImageId => { "Fn::FindInMap" => [ "RegionToDefaultAMI", { Ref => "AWS::Region" }, "DefaultAMI" ] },
+		SecurityGroupIds => [ { "Fn::GetAtt" => [ "SecurityGroup", "GroupId" ] } ],
+		UserData => { "Fn::Base64" => $userData },
+		InstanceInitiatedShutdownBehavior => "terminate",
+		InstanceType => "t2.micro",
+		KeyName => { Ref => "KeyName" },
+		SubnetId => { Ref => "Subnet" }
+	}
+};
+
+if( defined( $prettyPrint ) ) {
+	print( to_json( $template, { utf8 => 1, pretty => 1 } ) . "\n" );
+} else {
+	print( encode_json( $template ) . "\n" );
+}
+
+exit( 0 );
