@@ -6,137 +6,53 @@ use warnings;
 use Getopt::Long;
 use JSON;
 
-my( $prettyPrint );
+my( $prettyPrint, $userDataFile );
 GetOptions(
-	'pretty-print'	=> \$prettyPrint
+	'pretty-print'	=> \$prettyPrint,
+	'user-data'		=> \$userDataFile
 );
 
-# FIXME: This should read from (by default) the local 'userData' file.
-my $userData = "#!/bin/bash
-	echo bar > /tmp/foo
-	";
-
 my $template;
-$template->{ AWSTemplateFormatVersion } = "2010-09-09";
-$template->{ Description } = "HTCondor Marketplace v1";
+	$template->{ AWSTemplateFormatVersion } = "2010-09-09";
+	$template->{ Description } = "HTCondor Marketplace v1";
 
-$template->{ Mappings }->{ RegionToDefaultAMI } = {
-	"us-east-1" => { DefaultAMI => "ami-56aeb43c" }
-};
+	$template->{ Mappings }->{ RegionToDefaultAMI } = {
+		"us-east-1" => { DefaultAMI => "ami-56aeb43c" }
+	};
 
-$template->{ Parameters }->{ KeyName } = { Type => "AWS::EC2::KeyPair::KeyName" };
-# Maybe someday CloudFormation will add an "AWS::EC2::InstanceType" type.
-$template->{ Parameters }->{ InstanceType } = {
-	Type => "String",
-	Default => "t2.micro",
-	AllowedValues => [ "c1.medium", "c1.xlarge", "c3.2xlarge", "c3.4xlarge", "c3.8xlarge", "c3.large", "c3.xlarge", "c4.2xlarge", "c4.4xlarge", "c4.8xlarge", "c4.large", "c4.xlarge", "cc1.4xlarge", "cc2.8xlarge", "cg1.4xlarge", "cr1.8xlarge", "d2.2xlarge", "d2.4xlarge", "d2.8xlarge", "d2.xlarge", "g2.2xlarge", "g2.8xlarge", "hi1.4xlarge", "hs1.8xlarge", "i2.2xlarge", "i2.4xlarge", "i2.8xlarge", "i2.xlarge", "m1.large", "m1.medium", "m1.small", "m1.xlarge", "m2.2xlarge", "m2.4xlarge", "m2.xlarge", "m3.2xlarge", "m3.large", "m3.medium", "m3.xlarge", "m4.10xlarge", "m4.2xlarge", "m4.4xlarge", "m4.large", "m4.xlarge", "r3.2xlarge", "r3.4xlarge", "r3.8xlarge", "r3.large", "r3.xlarge", "t1.micro", "t2.large", "t2.medium", "t2.micro", "t2.nano", "t2.small" ]
-};
+	$template->{ Parameters }->{ KeyName } = {
+		Type => "AWS::EC2::KeyPair::KeyName"
+	};
 
-# There's no obvious way to allow the user to pick from the list of
-# existing resources xor ask the template to create a new one.  There's
-# also no obvious way of constraining the chosen subnet or security group
-# to be part of the specified VPC (or deriving the latter from the former).
-#
-# At some point, to cut down on the number of meaningless options we give our
-# poor users, I'm just creating a default VPC, Subnet, and the gibberish
-# associated with making them publicly-accessible.
-# $template->{ Parameters }->{ VPC } = { Type => "AWS::EC2::VPC::Id" };
-# $template->{ Parameters }->{ Subnet } = { Type => "AWS::EC2::Subnet::Id" };
-# $template->{ Parameters }->{ SecurityGroup } = { Type => "AWS::EC2::SecurityGroup::Id" };
+	# Maybe someday CloudFormation will add an "AWS::EC2::InstanceType" type.
+	$template->{ Parameters }->{ InstanceType } = {
+		Type => "String",
+		Default => "t2.micro",
+		AllowedValues => [ "c1.medium", "c1.xlarge", "c3.2xlarge", "c3.4xlarge", "c3.8xlarge", "c3.large", "c3.xlarge", "c4.2xlarge", "c4.4xlarge", "c4.8xlarge", "c4.large", "c4.xlarge", "cc1.4xlarge", "cc2.8xlarge", "cg1.4xlarge", "cr1.8xlarge", "d2.2xlarge", "d2.4xlarge", "d2.8xlarge", "d2.xlarge", "g2.2xlarge", "g2.8xlarge", "hi1.4xlarge", "hs1.8xlarge", "i2.2xlarge", "i2.4xlarge", "i2.8xlarge", "i2.xlarge", "m1.large", "m1.medium", "m1.small", "m1.xlarge", "m2.2xlarge", "m2.4xlarge", "m2.xlarge", "m3.2xlarge", "m3.large", "m3.medium", "m3.xlarge", "m4.10xlarge", "m4.2xlarge", "m4.4xlarge", "m4.large", "m4.xlarge", "r3.2xlarge", "r3.4xlarge", "r3.8xlarge", "r3.large", "r3.xlarge", "t1.micro", "t2.large", "t2.medium", "t2.micro", "t2.nano", "t2.small" ]
+	};
 
-$template->{ Resources }->{ DefaultSecurityGroup } = {
-	Type => "AWS::EC2::SecurityGroup",
-	Properties => {
-		VpcId => { Ref => "DefaultVPC" },
-		GroupDescription => "SSH",
-		SecurityGroupIngress => [
-			{
-				IpProtocol => "tcp",
-				FromPort => 22,
-				ToPort => 22,
-				CidrIp => "0.0.0.0/0"
-			}
-		]
-	}
-};
+	addDefaultNetworkingToTemplate( $template );
 
-$template->{ Resources }->{ DefaultInternetGateway } = {
-	Type => "AWS::EC2::InternetGateway",
-	Properties => { }
-};
+	my $userData = readWholeFile( $userDataFile );
+	$template->{ Resources }->{ CentralManager } = {
+		Type => "AWS::EC2::Instance",
+		DependsOn => "DefaultSubnetRouteAssociation",
+		Properties => {
+			ImageId => { "Fn::FindInMap" => [ "RegionToDefaultAMI", { Ref => "AWS::Region" }, "DefaultAMI" ] },
+			SecurityGroupIds => [ { "Fn::GetAtt" => [ "DefaultSecurityGroup", "GroupId" ] } ],
+			UserData => { "Fn::Base64" => $userData },
+			InstanceInitiatedShutdownBehavior => "terminate",
+			InstanceType => { Ref => "InstanceType" },
+			KeyName => { Ref => "KeyName" },
+			SubnetId => { Ref => "DefaultSubnet" }
+		}
+	};
 
-$template->{ Resources }->{ DefaultVPC } = {
-	Type => "AWS::EC2::VPC",
-	Properties => {
-		"CidrBlock" => "10.0.0.0/16",
-		EnableDnsSupport => "true",
-		EnableDnsHostnames => "true"
-	}
-};
+	$template->{ Outputs }->{ SSHCommand } = {
+		Description => "The SSH command to run to access the central manager.",
+		Value => { "Fn::Join" => [ "", [ "ssh -i ", { Ref => "KeyName" }, ".pem ec2-user@", { "Fn::GetAtt" => [ "CentralManager", "PublicIp" ] } ] ] }
+	};
 
-$template->{ Resources }->{ DefaultVPCGatewayAttachment } = {
-	Type => "AWS::EC2::VPCGatewayAttachment",
-	Properties => {
-		InternetGatewayId => { Ref => "DefaultInternetGateway" },
-		VpcId => { Ref => "DefaultVPC" }
-	}
-};
-
-$template->{ Resources }->{ DefaultSubnet } = {
-	Type => "AWS::EC2::Subnet",
-	Properties => {
-		VpcId => { Ref => "DefaultVPC" },
-		CidrBlock => "10.0.0.0/16",
-		MapPublicIpOnLaunch => "true"
-	}
-};
-
-$template->{ Resources }->{ DefaultRouteTable } = {
-	Type => "AWS::EC2::RouteTable",
-	Properties => {
-		VpcId => { Ref => "DefaultVPC" }
-	}
-};
-
-$template->{ Resources }->{ DefaultRoute } = {
-	Type => "AWS::EC2::Route",
-	DependsOn => [ "DefaultInternetGateway", "DefaultRouteTable", "DefaultVPCGatewayAttachment" ],
-	Properties => {
-		DestinationCidrBlock => "0.0.0.0/0",
-		GatewayId => { Ref => "DefaultInternetGateway" },
-		RouteTableId => { Ref => "DefaultRouteTable" }
-	}
-};
-
-$template->{ Resources }->{ DefaultSubnetRouteAssociation } = {
-	Type => "AWS::EC2::SubnetRouteTableAssociation",
-	Properties => {
-		RouteTableId => { Ref => "DefaultRouteTable" },
-		SubnetId => { Ref => "DefaultSubnet" }
-	}
-};
-
-# ----------------------------------------------------------------------------
-# The interesting part of the template starts here.
-
-$template->{ Resources }->{ CentralManager } = {
-	Type => "AWS::EC2::Instance",
-	DependsOn => "DefaultSubnetRouteAssociation",
-	Properties => {
-		ImageId => { "Fn::FindInMap" => [ "RegionToDefaultAMI", { Ref => "AWS::Region" }, "DefaultAMI" ] },
-		SecurityGroupIds => [ { "Fn::GetAtt" => [ "DefaultSecurityGroup", "GroupId" ] } ],
-		UserData => { "Fn::Base64" => $userData },
-		InstanceInitiatedShutdownBehavior => "terminate",
-		InstanceType => { Ref => "InstanceType" },
-		KeyName => { Ref => "KeyName" },
-		SubnetId => { Ref => "DefaultSubnet" }
-	}
-};
-
-$template->{ Outputs }->{ SSHCommand } = {
-	Description => "The SSH command to run to access the central manager.",
-	Value => { "Fn::Join" => [ "", [ "ssh -i ", { Ref => "KeyName" }, ".pem ec2-user@", { "Fn::GetAtt" => [ "CentralManager", "PublicIp" ] } ] ] }
-};
 
 if( defined( $prettyPrint ) ) {
 	print( to_json( $template, { utf8 => 1, pretty => 1 } ) . "\n" );
@@ -145,3 +61,104 @@ if( defined( $prettyPrint ) ) {
 }
 
 exit( 0 );
+
+sub readWholeFile {
+	my( $fileName ) = @_;
+	if(! defined( $fileName )) {
+		return "";
+	}
+
+	my $contents = undef;
+	open( WF, '<', $fileName );
+	while( my $line = <WF> ) { $contents .= $line; }
+	close( WF );
+	return $contents;
+}
+
+sub addDefaultNetworkingToTemplate {
+	my( $template ) = @_;
+
+	# There's no obvious way to allow the user to pick from the list of
+	# existing resources xor ask the template to create a new one.  There's
+	# also no obvious way of constraining the chosen subnet or security group
+	# to be part of the specified VPC (or deriving the latter from the former).
+	#
+	# At this point, to cut down on the number of meaningless options we give our
+	# poor users, I'm just creating a default VPC, Subnet, and the gibberish
+	# associated with making them publicly-accessible.
+	# $template->{ Parameters }->{ VPC } = { Type => "AWS::EC2::VPC::Id" };
+	# $template->{ Parameters }->{ Subnet } = { Type => "AWS::EC2::Subnet::Id" };
+	# $template->{ Parameters }->{ SecurityGroup } = { Type => "AWS::EC2::SecurityGroup::Id" };
+
+	$template->{ Resources }->{ DefaultSecurityGroup } = {
+		Type => "AWS::EC2::SecurityGroup",
+		Properties => {
+			VpcId => { Ref => "DefaultVPC" },
+			GroupDescription => "SSH",
+			SecurityGroupIngress => [
+				{
+					IpProtocol => "tcp",
+					FromPort => 22,
+					ToPort => 22,
+					CidrIp => "0.0.0.0/0"
+				}
+			]
+		}
+	};
+
+	$template->{ Resources }->{ DefaultInternetGateway } = {
+		Type => "AWS::EC2::InternetGateway",
+		Properties => { }
+	};
+
+	$template->{ Resources }->{ DefaultVPC } = {
+		Type => "AWS::EC2::VPC",
+		Properties => {
+			"CidrBlock" => "10.0.0.0/16",
+			EnableDnsSupport => "true",
+			EnableDnsHostnames => "true"
+		}
+	};
+
+	$template->{ Resources }->{ DefaultVPCGatewayAttachment } = {
+		Type => "AWS::EC2::VPCGatewayAttachment",
+		Properties => {
+			InternetGatewayId => { Ref => "DefaultInternetGateway" },
+			VpcId => { Ref => "DefaultVPC" }
+		}
+	};
+
+	$template->{ Resources }->{ DefaultSubnet } = {
+		Type => "AWS::EC2::Subnet",
+		Properties => {
+			VpcId => { Ref => "DefaultVPC" },
+			CidrBlock => "10.0.0.0/16",
+			MapPublicIpOnLaunch => "true"
+		}
+	};
+
+	$template->{ Resources }->{ DefaultRouteTable } = {
+		Type => "AWS::EC2::RouteTable",
+		Properties => {
+			VpcId => { Ref => "DefaultVPC" }
+		}
+	};
+
+	$template->{ Resources }->{ DefaultRoute } = {
+		Type => "AWS::EC2::Route",
+		DependsOn => [ "DefaultInternetGateway", "DefaultRouteTable", "DefaultVPCGatewayAttachment" ],
+		Properties => {
+			DestinationCidrBlock => "0.0.0.0/0",
+			GatewayId => { Ref => "DefaultInternetGateway" },
+			RouteTableId => { Ref => "DefaultRouteTable" }
+		}
+	};
+
+	$template->{ Resources }->{ DefaultSubnetRouteAssociation } = {
+		Type => "AWS::EC2::SubnetRouteTableAssociation",
+		Properties => {
+			RouteTableId => { Ref => "DefaultRouteTable" },
+			SubnetId => { Ref => "DefaultSubnet" }
+		}
+	};
+}
