@@ -1,4 +1,4 @@
-var response = require( 'cfn-response' );
+var response = require( 'response' );
 exports.handler = function( event, context ) {
 	console.log( "Received request:\n", JSON.stringify( event ) );
 
@@ -110,11 +110,47 @@ exports.handler = function( event, context ) {
 			});
 		});
 	} else if( event.RequestType == 'Timer' ) {
-		// FIXME: Check to see if the lease has expired.
 		console.log( "Checking to see if the lease has expired on '" + stackName + "'..." );
 
-		context.succeed();
-		return;
+		function failWithError( message, error ) {
+			console.log( message );
+			if( error ) { console.log( error, error.stack ); }
+			context.fail();
+		};
+
+		var AWS = require( 'aws-sdk' );
+		var cf = new AWS.CloudFormation();
+
+		var params = {
+			StackName : stackName
+		};
+		cf.describeStacks( params, function( error, data ) {
+			if( error ) {
+				failWithError( "describeStacks() call failed", error );
+				return;
+			}
+
+			var stack = data.Stacks[0];
+			var parameters = stack.Parameters;
+			var leaseDuration = undef;
+			for( var i = 0; i < parameters.length; ++i ) {
+				if( parameters[i].ParameterKey == "LeaseDuration" ) {
+					leaseDuration = parameters[i].ParameterValue;
+				}
+			}
+			if(! leaseDuration) {
+				failWithError( "describeStacks() call failed" );
+				return;
+			} else {
+				console.log( "Found duration: " + leaseDuration );
+			}
+
+			var creationTime = stack.CreationTime;
+			print( "Considering creation time '" + creationTime + "'" );
+
+			context.succeed();
+			return;
+		});
 	} else {
 		console.log( "Ignoring unknown request '" + event.RequestType + "'." );
 		response.send( event, context, response.SUCCESS );

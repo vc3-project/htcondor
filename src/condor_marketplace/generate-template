@@ -6,7 +6,7 @@ use warnings;
 use Getopt::Long;
 use JSON;
 
-my $VERSION = "2";
+my $VERSION = "1";
 
 my( $prettyPrint, $userDataFile );
 GetOptions(
@@ -178,17 +178,6 @@ sub addDefaultNetworkingToTemplate {
 sub addLeaseToTemplate {
 	my( $template ) = @_;
 
-	#$template->{ Resources }->{ Lease } = {
-	#	Type => "AWS::CloudFormation::Stack",
-	#	Properties => {
-	#		TemplateURL => "https://s3.amazonaws.com/condor-annex/lease-${VERSION}",
-	#		Parameters => {
-	#			StackName => { Ref => "AWS::StackName" },
-	#			LeaseDuration => { Ref => "LeaseDuration" }
-	#		}
-	#	}
-	#};
-
 	my $lambdaBasicExecutionPolicy = {
 		PolicyName => "lambda_basic_execution",
 		PolicyDocument => {
@@ -230,6 +219,7 @@ sub addLeaseToTemplate {
 								Action => [
 									"events:*",
 									"lambda:AddPermission",
+									"cloudformation:DescribeStacks",
 									"cloudformation:DeleteStack",
 
 									"lambda:DeleteFunction",
@@ -246,16 +236,18 @@ sub addLeaseToTemplate {
 		}
 	};
 
-	my $leaseFunctionCode = readWholeFile( "LeaseFunction.js" );
 	$template->{ Resources }->{ LeaseFunction } = {
 		Type => "AWS::Lambda::Function",
 		DependsOn => "LeaseFunctionRole",
 		Properties => {
 			Role => { "Fn::GetAtt" => [ "LeaseFunctionRole", "Arn" ] },
-			Runtime => "nodejs",
+			Runtime => "nodejs4.3",
 			Timeout => 60,
-			Handler => "index.handler",
-			Code => { "ZipFile" => $leaseFunctionCode }
+			Handler => "lease.handler",
+			Code => {
+				S3Bucket => { "Fn::Join" => [ "-", [ "condor-marketplace", { "Ref" => "AWS::Region" } ] ] },
+				S3Key => "lease-" . $VERSION . ".zip"
+			}
 		}
 	};
 
