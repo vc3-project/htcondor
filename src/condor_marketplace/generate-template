@@ -173,6 +173,10 @@ sub addDefaultNetworkingToTemplate {
 			SubnetId => { Ref => "DefaultSubnet" }
 		}
 	};
+
+	# We must delete the LeaseFunctionRole last, because it's what gives
+	# us permission to delete anything at all.
+	setUnsetDependenciesTo( $template, "LeaseFunctionRole" );
 }
 
 sub addLeaseToTemplate {
@@ -219,13 +223,32 @@ sub addLeaseToTemplate {
 								Action => [
 									"events:*",
 									"lambda:AddPermission",
+									"lambda:InvokeFunction",
+									"lambda:DeleteFunction",
 									"cloudformation:DescribeStacks",
 									"cloudformation:DeleteStack",
 
-									"lambda:DeleteFunction",
-									"ec2:*",
-									"iam:*",
-									"vpc:*"
+									"iam:DeleteRolePolicy",
+									"iam:DeleteRole",
+
+									"ec2:DescribeInstances",
+									"ec2:TerminateInstances",
+
+									"ec2:DescribeRouteTables",
+									"ec2:DisassociateRouteTable",
+									"ec2:DeleteRouteTable",
+									"ec2:DeleteRoute",
+
+									"ec2:DescribeInternetGateways",
+									"ec2:DescribeInternetGatewaysResult",
+									"ec2:DetachInternetGateway",
+									"ec2:DeleteInternetGateway",
+
+									"ec2:DeleteSecurityGroup",
+									"ec2:DescribeSubnets",
+									"ec2:DeleteSubnet",
+									"ec2:DescribeVpcs",
+									"ec2:DeleteVpc"
 								],
 								Resource => "*"
 							}
@@ -265,3 +288,15 @@ sub addLeaseToTemplate {
 		}
 	};
 }
+
+sub setUnsetDependenciesTo {
+	my( $template, $resourceName ) = @_;
+
+	my $resources = $template->{ Resources };
+	while( my( $name, $resource ) = each( %{$resources} ) ) {
+		if( $name eq $resourceName ) { next; }
+		if( $resource->{ DependsOn } ) { next; }
+		$resource->{ DependsOn } = $resourceName;
+	}
+}
+

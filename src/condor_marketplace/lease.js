@@ -1,3 +1,4 @@
+var moment = require( 'moment' );
 var response = require( 'response' );
 exports.handler = function( event, context ) {
 	console.log( "Received request:\n", JSON.stringify( event ) );
@@ -130,9 +131,9 @@ exports.handler = function( event, context ) {
 				return;
 			}
 
+			var leaseDuration;
 			var stack = data.Stacks[0];
 			var parameters = stack.Parameters;
-			var leaseDuration = undef;
 			for( var i = 0; i < parameters.length; ++i ) {
 				if( parameters[i].ParameterKey == "LeaseDuration" ) {
 					leaseDuration = parameters[i].ParameterValue;
@@ -141,14 +142,27 @@ exports.handler = function( event, context ) {
 			if(! leaseDuration) {
 				failWithError( "describeStacks() call failed" );
 				return;
-			} else {
-				console.log( "Found duration: " + leaseDuration );
 			}
 
-			var creationTime = stack.CreationTime;
-			print( "Considering creation time '" + creationTime + "'" );
+			var then = moment.utc( stack.CreationTime, "ddd MMM DD YYYY HH:mm:ss [GMT]Z [(UTC)]" );
+			var stackDuration = moment().diff( then, 'm' );
+			if( stackDuration > leaseDuration ) {
+				console.log( "... yes.  (" + stackDuration + " > " + leaseDuration + ").  Deleting stack..." );
 
-			context.succeed();
+				params = { StackName : stackName };
+				cf.deleteStack( params, function( error, data ) {
+					if( error ) {
+						failWithError( "deleteStack() call failed" );
+						return;
+					}
+
+					console.log( "...done." );
+					context.succeed();
+				});
+			} else {
+				console.log( "... no.  (" + stackDuration + " <= " + leaseDuration + ")" );
+				context.succeed();
+			}
 			return;
 		});
 	} else {

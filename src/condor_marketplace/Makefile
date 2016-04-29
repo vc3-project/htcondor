@@ -28,6 +28,6 @@ $(S3TARGETS) : .upload/% : %
 # Build the function uploads from their sources.
 #
 
-lease-$(VERSION).zip : lease.js response.js
+lease-$(VERSION).zip : lease.js response.js moment.js
 	@rm -f $@
 	@zip $@ $^
