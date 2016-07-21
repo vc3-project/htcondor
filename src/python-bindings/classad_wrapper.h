@@ -12,7 +12,18 @@ __pragma(message("====BOOST_DEBUG_PYTHON defined. python_d will be needed to use
 #endif
 #endif
 
+enum ParserType {
+  CLASSAD_AUTO,
+  CLASSAD_OLD,
+  CLASSAD_NEW,
+  CLASSAD_XML,
+  CLASSAD_JSON
+};
+
 void registerFunction(boost::python::object function, boost::python::object name);
+
+void setDefaultParser(ParserType);
+ParserType getDefaultParser();
 
 classad::ExprTree* convert_python_to_exprtree(boost::python::object value);
 
@@ -67,9 +78,15 @@ struct ClassAdWrapper : classad::ClassAd, boost::python::wrapper<classad::ClassA
 
     std::string toRepr() const;
 
-    std::string toString() const;
+    std::string toString(ParserType=CLASSAD_AUTO) const;
 
     std::string toOldString() const;
+
+    std::string toOldStringDepr() const;
+
+    std::string toXmlString() const;
+
+    std::string toJsonString() const;
 
     AttrKeyIter beginKeys();
 

@@ -12,6 +12,8 @@
 
 #include <classad/source.h>
 #include <classad/sink.h>
+#include <classad/jsonSink.h>
+#include <classad/xmlSink.h>
 #include <classad/classadCache.h>
 #include <classad/matchClassad.h>
 
@@ -24,6 +26,11 @@
    #define PyInt_Check(op)  PyNumber_Check(op)
    #define PyString_Check(op)  PyBytes_Check(op)
 #endif
+
+
+static ParserType g_parser_type = CLASSAD_NEW;
+void setDefaultParser(ParserType type) {g_parser_type = type;}
+ParserType getDefaultParser() {return g_parser_type;}
 
 
 void
@@ -953,13 +960,28 @@ std::string ClassAdWrapper::toRepr() const
 }
 
 
-std::string ClassAdWrapper::toString() const
+std::string ClassAdWrapper::toString(ParserType type) const
 {
+    if (type == CLASSAD_AUTO) {type = g_parser_type;}
+
+    if (type == CLASSAD_OLD) {return toOldString();}
+    else if (type == CLASSAD_JSON) {return toJsonString();}
+    else if (type == CLASSAD_XML) {return toXmlString();}
+
     classad::PrettyPrint pp;
     std::string ad_str;
     pp.Unparse(ad_str, this);
     return ad_str;
 }
+
+
+std::string
+ClassAdWrapper::toOldStringDepr() const
+{
+    PyErr_Warn(PyExc_DeprecationWarning, "ClassAd Deprecation: .toOldString() is deprecated; use .format(classad.Formats.Old) instead.");
+    return toOldString();
+}
+
 
 std::string ClassAdWrapper::toOldString() const
 {
@@ -969,6 +991,26 @@ std::string ClassAdWrapper::toOldString() const
     pp.Unparse(ad_str, this);
     return ad_str;
 }
+
+
+std::string ClassAdWrapper::toJsonString() const
+{
+    classad::ClassAdJsonUnParser pp;
+    std::string ad_str;
+    pp.Unparse(ad_str, this);
+    return ad_str;
+}
+
+
+std::string
+ClassAdWrapper::toXmlString() const
+{
+    classad::ClassAdXMLUnParser pp;
+    std::string ad_str;
+    pp.Unparse(ad_str, this);
+    return ad_str;
+}
+
 
 AttrKeyIter ClassAdWrapper::beginKeys()
 {

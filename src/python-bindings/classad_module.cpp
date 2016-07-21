@@ -148,11 +148,14 @@ BOOST_PYTHON_MODULE(classad)
     def("lastError", GetLastCondorError, "The last error that occurred in the ClassAd library.");
     def("registerLibrary", RegisterLibrary, "Register a shared library of ClassAd functions.");
 
-    boost::python::enum_<ParserType>("Parser")
+    boost::python::enum_<ParserType>("Formats")
         .value("Auto", CLASSAD_AUTO)
         .value("Old", CLASSAD_OLD)
         .value("New", CLASSAD_NEW)
+        .value("JSON", CLASSAD_JSON)
+        .value("XML", CLASSAD_XML)
         ;
+    boost::python::scope().attr("Parser") = boost::python::scope().attr("Formats");
 
     def("parse", parseString, return_value_policy<manage_new_object>());
     def("parse", parseFile, return_value_policy<manage_new_object>(),
@@ -189,6 +192,13 @@ BOOST_PYTHON_MODULE(classad)
         ":param parser: Which ClassAd parser to use.\n"
         ":return: A ClassAd object.",
         (boost::python::arg("input"), boost::python::arg("parser")=CLASSAD_AUTO));
+    def("setDefaultFormat", setDefaultParser,
+        "Set the default format for parsing / unparsing ClassAds\n"
+        ":param kind: The new default format, from classad.Parsers\n",
+        (boost::python::arg("kind")));
+    def("getDefaultFormat", getDefaultParser,
+        "Get the default format for parsing / unparsing ClassAds\n"
+        ":return: A classad.Formats object.");
 
     def("quote", quote, "Convert a python string into a string corresponding ClassAd string literal");
     def("unquote", unquote, "Convert a python string escaped as a ClassAd string back to python");
@@ -207,7 +217,8 @@ BOOST_PYTHON_MODULE(classad)
         .def("__getitem__", &ClassAdWrapper::LookupWrap, condor::classad_expr_return_policy<>())
         .def("eval", &ClassAdWrapper::EvaluateAttrObject, "Evaluate the ClassAd attribute to a python object.")
         .def("__setitem__", &ClassAdWrapper::InsertAttrObject)
-        .def("__str__", &ClassAdWrapper::toString)
+        .def("__str__", &ClassAdWrapper::toString, (boost::python::arg("format")=CLASSAD_AUTO))
+        .def("format", &ClassAdWrapper::toString, (boost::python::arg("format")=CLASSAD_AUTO))
         .def("__repr__", &ClassAdWrapper::toRepr)
         // I see no way to use the SetParentScope interface safely.
         // Delay exposing it to python until we absolutely have to!
@@ -218,7 +229,7 @@ BOOST_PYTHON_MODULE(classad)
         .def("items", boost::python::range(&ClassAdWrapper::beginItems, &ClassAdWrapper::endItems))
         .def("__len__", &ClassAdWrapper::size)
         .def("lookup", &ClassAdWrapper::LookupExpr, condor::classad_expr_return_policy<>(), "Lookup an attribute and return a ClassAd expression.  This method will not attempt to evaluate it to a python object.")
-        .def("printOld", &ClassAdWrapper::toOldString, "Represent this ClassAd as a string in the \"old ClassAd\" format.")
+        .def("printOld", &ClassAdWrapper::toOldStringDepr, "Represent this ClassAd as a string in the \"old ClassAd\" format.")
         .def("get", &ClassAdWrapper::get, get_overloads("Retrieve a value from the ClassAd"))
         .def("setdefault", &ClassAdWrapper::setdefault, setdefault_overloads("Set a default value for a ClassAd"))
         .def("update", &ClassAdWrapper::update, "Copy the contents of a given ClassAd into the current object")
