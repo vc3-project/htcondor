@@ -13,6 +13,8 @@
 #endif
 
 static OldClassAdIterator parseOldAds_impl(boost::python::object input);
+static OldClassAdIterator parseJsonAds(boost::python::object input);
+static OldClassAdIterator parseXmlAds(boost::python::object input);
 
 ClassAdWrapper *parseString(const std::string &str)
 {
@@ -80,7 +82,8 @@ ClassAdWrapper *parseOld(boost::python::object input)
 }
 
 
-bool isOldAd(boost::python::object source)
+static ParserType
+determineAdType(boost::python::object source)
 {
     boost::python::extract<std::string> input_extract(source);
     if (input_extract.check())
@@ -89,11 +92,11 @@ bool isOldAd(boost::python::object source)
         const char * adchar = input_str.c_str();
         while (*adchar)
         {
-            if ((*adchar == '/') || (*adchar == '[')) {return false;}
-            if (!isspace(*adchar)) {return true;}
+            if ((*adchar == '/') || (*adchar == '[')) {return CLASSAD_OLD;}
+            if (!isspace(*adchar)) {return CLASSAD_NEW;}
             adchar++;
         }
-        return false;
+        return CLASSAD_NEW;
     }
     if (!py_hasattr(source, "tell") || !py_hasattr(source, "read") || !py_hasattr(source, "seek")) {THROW_EX(ValueError, "Unable to determine if input is old or new classad");}
     size_t end_ptr;
@@ -110,17 +113,17 @@ bool isOldAd(boost::python::object source)
         }
         throw;
     }
-    bool isold = false;
+    ParserType adType = CLASSAD_NEW;
     while (true)
     {
           // Note: in case of IOError, this leaves the source at a different position than we started.
         std::string character = boost::python::extract<std::string>(source.attr("read")(1));
         if (!character.size()) {break;}
-        if ((character == "/") || (character == "[")) {isold = false; break;}
-        if (!isspace(character.c_str()[0])) {isold = true; break;}
+        if ((character == "/") || (character == "[")) {adType = CLASSAD_NEW; break;}
+        if (!isspace(character.c_str()[0])) {adType = CLASSAD_OLD; break;}
     }
     source.attr("seek")(end_ptr);
-    return isold;
+    return adType;
 }
 
 
@@ -128,7 +131,7 @@ boost::shared_ptr<ClassAdWrapper> parseOne(boost::python::object input, ParserTy
 {
     if (type == CLASSAD_AUTO)
     {
-        type = isOldAd(input) ? CLASSAD_OLD : CLASSAD_NEW;
+        type = determineAdType(input);
     }
     boost::shared_ptr<ClassAdWrapper> result_ad(new ClassAdWrapper());
     input = parseAds(input, type);
@@ -319,7 +322,34 @@ parseOldAds_impl(boost::python::object input)
         : input.attr("__iter__")();
 
     return OldClassAdIterator(input_iter);
-};
+}
+
+
+static
+OldClassAdIterator
+parseJsonAds(boost::python::object input)
+{
+    boost::python::object input_iter = (PyString_Check(input.ptr()) || PyUnicode_Check(input.ptr())) ?
+          input.attr("splitlines")().attr("__iter__")()
+        : input.attr("__iter__")();
+
+    THROW_EX(NotImplementedError, "JSON parser not available.");
+    return OldClassAdIterator(input_iter);
+}
+
+
+static
+OldClassAdIterator
+parseXmlAds(boost::python::object input)
+{
+    boost::python::object input_iter = (PyString_Check(input.ptr()) || PyUnicode_Check(input.ptr())) ?
+          input.attr("splitlines")().attr("__iter__")()
+        : input.attr("__iter__")();
+
+    THROW_EX(NotImplementedError, "JSON parser not available.");
+    return OldClassAdIterator(input_iter);
+}
+
 
 ClassAdFileIterator::ClassAdFileIterator(FILE *source)
   : m_done(false), m_source(source), m_parser(new classad::ClassAdParser())
@@ -377,9 +407,11 @@ parseAds(boost::python::object input, ParserType type)
 {
     if (type == CLASSAD_AUTO)
     {
-        type = isOldAd(input) ? CLASSAD_OLD : CLASSAD_NEW;
+        type = determineAdType(input);
     }
     if (type == CLASSAD_OLD) {return boost::python::object(parseOldAds_impl(input));}
+    else if (type == CLASSAD_JSON) {return boost::python::object(parseJsonAds(input));}
+    else if (type == CLASSAD_XML) {return boost::python::object(parseXmlAds(input));}
 
     boost::python::extract<std::string> input_extract(input);
     if (input_extract.check())
