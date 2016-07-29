@@ -1,0 +1,1350 @@
+{
+	"AWSTemplateFormatVersion" : "2010-09-09",
+
+	"Description" : "HTCondor CloudFormation for condor_annex",
+
+	"Metadata" : {
+		"AWS::CloudFormation::Interface" : {
+			"ParameterGroups" : [
+				{
+					"Label" : { "default" : "Annex Configuration" },
+					"Parameters" : [ "ProjectID", "Size", "LeaseDuration" ]
+				},
+				{
+					"Label" : { "default" : "Additional Configuration" },
+					"Parameters" : [ "CentralManager", "SSHKeypairName", "S3PoolPassword", "TemplateURL", "VPC", "VPCSubnets", "S3DeleteBucket", "S3ConfigFile" ]
+				},
+				{
+					"Label" : { "default" : "Launch Configuration 1" },
+					"Parameters" : [ "ImageID1", "InstanceType1", "SpotPrice1" ]
+				},
+				{
+					"Label" : { "default" : "Launch Configuration 2 (optional)" },
+					"Parameters" : [ "ImageID2", "InstanceType2", "SpotPrice2" ]
+				},
+				{
+					"Label" : { "default" : "Launch Configuration 3 (optional)" },
+					"Parameters" : [ "ImageID3", "InstanceType3", "SpotPrice3" ]
+				},
+				{
+					"Label" : { "default" : "Launch Configuration 4 (optional)" },
+					"Parameters" : [ "ImageID4", "InstanceType4", "SpotPrice4" ]
+				},
+				{
+					"Label" : { "default" : "Launch Configuration 5 (optional)" },
+					"Parameters" : [ "ImageID5", "InstanceType5", "SpotPrice5" ]
+				},
+				{
+					"Label" : { "default" : "Launch Configuration 6 (optional)" },
+					"Parameters" : [ "ImageID6", "InstanceType6", "SpotPrice6" ]
+				},
+				{
+					"Label" : { "default" : "Launch Configuration 7 (optional)" },
+					"Parameters" : [ "ImageID7", "InstanceType7", "SpotPrice7" ]
+				},
+				{
+					"Label" : { "default" : "Launch Configuration 8 (optional)" },
+					"Parameters" : [ "ImageID8", "InstanceType8", "SpotPrice8" ]
+				}
+			]
+		}
+	},
+
+	"Mappings" : {
+		"RegionToDefaultAMI" : {
+			"us-east-1" : { "DefaultAMI" : "ami-91e1a3fb" },
+			"us-west-1" : { "DefaultAMI" : "ami-7f06731f" },
+			"us-west-2" : { "DefaultAMI" : "ami-ac8890cd" }
+		},
+		"VersionNumber" : {
+			"CurrentVersion" : { "Number" : "2" }
+		}
+	},
+
+	"Parameters" : {
+		"Size" : {
+			"Type" : "Number",
+			"Default" : 10,
+			"MinValue" : 1,
+			"Description" : "How many instances do you want to add to your pool?",
+			"ConstraintDescription" : "[Size] You must add at least one instance to your pool."
+		},
+		"CentralManager" : {
+			"Type" : "String",
+			"Description" : "The pool whose size you're increasing."
+		},
+		"LeaseDuration" : {
+			"Type" : "Number",
+			"Default" : 15,
+			"MinValue" : 1,
+			"Description" : "How long should the lease be (in minutes)?",
+			"ConstraintDescription" : "[LeaseDuration] CloudWatch alarms must have periods of at least 60 seconds."
+		},
+		"SSHKeypairName" : {
+			"Type" : "AWS::EC2::KeyPair::KeyName",
+			"Description" : "Which SSH key pair should allow access to the instances?",
+			"ConstraintDescription" : "[SSHKeypairName] SSH keypairs must already exist."
+		},
+		"S3PoolPassword" : {
+			"Type" : "String",
+			"Description" : "The private S3 object containing the pool password.  (Must be of the form '<bucket-name>/<file-name>'.)"
+		},
+		"S3DeleteBucket" : {
+			"Type" : "String",
+			"Default" : "",
+			"Description" : "An S3 bucket to destroy with the stack."
+		},
+		"S3ConfigFile" : {
+			"Type" : "String",
+			"Default" : "",
+			"Description" : "An S3 object containing additional HTCondor configuration."
+		},
+		"ProjectID" : {
+			"Type" : "String",
+			"Description" : "The annex will be tagged with this ID."
+		},
+		"VPC" : {
+			"Type" : "AWS::EC2::VPC::Id",
+			"Description" : "The VPC in which your annex will be situated."
+		},
+		"VPCSubnets" : {
+			"Type" : "List<AWS::EC2::Subnet::Id>",
+			"Description" : "A list of VPC subnets in which to start your annex's instances."
+		},
+		"ImageID1" : {
+			"Type" : "AWS::EC2::Image::Id",
+			"Description" : "The AMI to launch."
+		},
+		"SpotPrice1" : {
+			"Type" : "Number",
+			"Default" : "-1",
+			"Description" : "The spot price (if a spot request)."
+		},
+		"InstanceType1" : {
+			"Type" : "String",
+			"Default" : "m4.large",
+			"Description" : "The instance type to launch."
+		},
+		"ImageID2" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "Another AMI (#2) to launch."
+		},
+		"SpotPrice2" : {
+			"Type" : "Number",
+			"Default" : "-1",
+			"Description" : "The spot price (if a spot request) for AMI #2."
+		},
+		"InstanceType2" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "The instance type for AMI #2."
+		},
+		"ImageID3" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "Another AMI (#3) to launch."
+		},
+		"SpotPrice3" : {
+			"Type" : "Number",
+			"Default" : "-1",
+			"Description" : "The spot price (if a spot request) for AMI #3."
+		},
+		"InstanceType3" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "The instance type for AMI #3."
+		},
+		"ImageID4" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "Another AMI (#4) to launch."
+		},
+		"SpotPrice4" : {
+			"Type" : "Number",
+			"Default" : "-1",
+			"Description" : "The spot price (if a spot request) for AMI #4."
+		},
+		"InstanceType4" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "The instance type for AMI #4."
+		},
+		"ImageID5" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "Another AMI (#5) to launch."
+		},
+		"SpotPrice5" : {
+			"Type" : "Number",
+			"Default" : "-1",
+			"Description" : "The spot price (if a spot request) for AMI #5."
+		},
+		"InstanceType5" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "The instance type for AMI #5."
+		},
+		"ImageID6" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "Another AMI (#6) to launch."
+		},
+		"SpotPrice6" : {
+			"Type" : "Number",
+			"Default" : "-1",
+			"Description" : "The spot price (if a spot request) for AMI #6."
+		},
+		"InstanceType6" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "The instance type for AMI #6."
+		},
+		"ImageID7" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "Another AMI (#7) to launch."
+		},
+		"SpotPrice7" : {
+			"Type" : "Number",
+			"Default" : "-1",
+			"Description" : "The spot price (if a spot request) for AMI #7."
+		},
+		"InstanceType7" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "The instance type for AMI #7."
+		},
+		"ImageID8" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "Another AMI (#8) to launch."
+		},
+		"SpotPrice8" : {
+			"Type" : "Number",
+			"Default" : "-1",
+			"Description" : "The spot price (if a spot request) for AMI #8."
+		},
+		"InstanceType8" : {
+			"Type" : "String",
+			"Default" : "NONE",
+			"Description" : "The instance type for AMI #8."
+		},
+		"TemplateURL" : {
+			"Type" : "String",
+			"Default" : "https://s3.amazonaws.com/condor-annex/launch-configuration-",
+			"Description" : "The base URL of the launch configuration template."
+		}
+	},
+
+	"Conditions" : {
+		"IsDedicatedInstance-1" : {
+			"Fn::Equals" : [ "-1", { "Ref" : "SpotPrice1" }	]
+		},
+		"IsDedicatedInstance-2" : {
+			"Fn::Equals" : [ "-1", { "Ref" : "SpotPrice2" }	]
+		},
+		"IsDedicatedInstance-3" : {
+			"Fn::Equals" : [ "-1", { "Ref" : "SpotPrice3" }	]
+		},
+		"IsDedicatedInstance-4" : {
+			"Fn::Equals" : [ "-1", { "Ref" : "SpotPrice4" }	]
+		},
+		"IsDedicatedInstance-5" : {
+			"Fn::Equals" : [ "-1", { "Ref" : "SpotPrice5" }	]
+		},
+		"IsDedicatedInstance-6" : {
+			"Fn::Equals" : [ "-1", { "Ref" : "SpotPrice6" }	]
+		},
+		"IsDedicatedInstance-7" : {
+			"Fn::Equals" : [ "-1", { "Ref" : "SpotPrice7" }	]
+		},
+		"IsDedicatedInstance-8" : {
+			"Fn::Equals" : [ "-1", { "Ref" : "SpotPrice8" }	]
+		},
+		"CreateSpotFleet" : {
+			"Fn::Not" : [ {
+				"Fn::And" : [
+					{ "Condition" : "IsDedicatedInstance-1" },
+					{ "Condition" : "IsDedicatedInstance-2" },
+					{ "Condition" : "IsDedicatedInstance-3" },
+					{ "Condition" : "IsDedicatedInstance-4" },
+					{ "Condition" : "IsDedicatedInstance-5" },
+					{ "Condition" : "IsDedicatedInstance-6" },
+					{ "Condition" : "IsDedicatedInstance-7" },
+					{ "Condition" : "IsDedicatedInstance-8" }
+				]
+			} ]
+		},
+		"Config1" : {
+			"Fn::Not" : [
+				{ "Fn::Equals" : [ "NONE", { "Ref" : "InstanceType1" } ] }
+			]
+		},
+		"Config2" : {
+			"Fn::Not" : [
+				{ "Fn::Equals" : [ "NONE", { "Ref" : "InstanceType2" } ] }
+			]
+		},
+		"Config3" : {
+			"Fn::Not" : [
+				{ "Fn::Equals" : [ "NONE", { "Ref" : "InstanceType3" } ] }
+			]
+		},
+		"Config4" : {
+			"Fn::Not" : [
+				{ "Fn::Equals" : [ "NONE", { "Ref" : "InstanceType4" } ] }
+			]
+		},
+		"Config5" : {
+			"Fn::Not" : [
+				{ "Fn::Equals" : [ "NONE", { "Ref" : "InstanceType5" } ] }
+			]
+		},
+		"Config6" : {
+			"Fn::Not" : [
+				{ "Fn::Equals" : [ "NONE", { "Ref" : "InstanceType6" } ] }
+			]
+		},
+		"Config7" : {
+			"Fn::Not" : [
+				{ "Fn::Equals" : [ "NONE", { "Ref" : "InstanceType7" } ] }
+			]
+		},
+		"Config8" : {
+			"Fn::Not" : [
+				{ "Fn::Equals" : [ "NONE", { "Ref" : "InstanceType8" } ] }
+			]
+		},
+		"ConfigCondor" : {
+			"Fn::Not" : [
+				{ "Fn::Equals" : [ "", { "Ref" : "S3ConfigFile" } ] }
+			]
+		}
+	},
+
+	"Resources" : {
+		"LeaseFunctionRole" : {
+			"Type" : "AWS::IAM::Role",
+			"Properties" : {
+				"AssumeRolePolicyDocument" : {
+					"Version" : "2012-10-17",
+					"Statement" : [ {
+						"Effect" : "Allow",
+						"Action" : [ "sts:AssumeRole" ],
+						"Principal" : {
+							"Service" : [ "lambda.amazonaws.com" ]
+						}
+					} ]
+				},
+				"Policies" : [ {
+					"PolicyName" : "lambda_basic_exection",
+					"PolicyDocument" : {
+						"Version" : "2012-10-17",
+						"Statement" : [ {
+							"Effect" : "Allow",
+							"Action" : [
+								"logs:CreateLogGroup",
+								"logs:CreateLogStream",
+								"logs:PutLogEvents"
+							],
+							"Resource" : "arn:aws:logs:*:*:*"
+						} ]
+					}
+				}, {
+					"PolicyName" : "lambda_lease_policy",
+					"PolicyDocument" : {
+						"Version" : "2012-10-17",
+						"Statement" : [ {
+							"Effect" : "Allow",
+							"Action" : [
+								"cloudformation:DeleteStack",
+								"cloudformation:DescribeStackResource",
+								"sns:ListTopics",
+								"sns:ListSubscriptionsByTopic",
+								"sns:DeleteTopic",
+								"sns:Unsubscribe",
+								"cloudwatch:DeleteAlarms",
+								"cloudwatch:SetAlarmState",
+								"cloudwatch:GetMetricStatistics",
+								"autoscaling:DescribeAutoScalingGroups",
+								"autoscaling:DescribeScalingActivities",
+								"autoscaling:UpdateAutoScalingGroup",
+								"autoscaling:DeleteAutoScalingGroup",
+								"autoscaling:DeleteLaunchConfiguration",
+								"lambda:InvokeFunction",
+								"lambda:DeleteFunction",
+								"ec2:DeleteSecurityGroup",
+								"iam:DeleteRole",
+								"iam:DeleteRolePolicy",
+								"iam:RemoveRoleFromInstanceProfile",
+								"iam:DeleteInstanceProfile"
+							],
+							"Resource" : "*"
+						} ]
+					}
+				} ]
+			}
+		},
+
+		"CleanUpFunctionRole" : {
+			"Type" : "AWS::IAM::Role",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"AssumeRolePolicyDocument" : {
+					"Version" : "2012-10-17",
+					"Statement" : [ {
+						"Effect" : "Allow",
+						"Action" : [ "sts:AssumeRole" ],
+						"Principal" : {
+							"Service" : [ "lambda.amazonaws.com" ]
+						}
+					} ]
+				},
+				"Policies" : [ {
+					"PolicyName" : "lambda_basic_exection",
+					"PolicyDocument" : {
+						"Version" : "2012-10-17",
+						"Statement" : [ {
+							"Effect" : "Allow",
+							"Action" : [
+								"logs:CreateLogGroup",
+								"logs:CreateLogStream",
+								"logs:PutLogEvents"
+							],
+							"Resource" : "arn:aws:logs:*:*:*"
+						} ]
+					}
+				}, {
+					"PolicyName" : "lambda_cleanup_policy",
+					"PolicyDocument" : {
+						"Version" : "2012-10-17",
+						"Statement" : [ {
+							"Effect" : "Allow",
+							"Action" : [
+								"cloudformation:DescribeStackResource",
+								"sns:ListSubscriptionsByTopic",
+								"sns:Unsubscribe"
+							],
+							"Resource" : "*"
+						}, {
+							"Effect" : "Allow",
+							"Action" : "s3:deleteObject",
+							"Resource" : { "Fn::Join" : [ "", [ "arn:aws:s3:::", { "Ref" : "S3PoolPassword" } ] ] }
+						}, {
+							"Effect" : "Allow",
+							"Action" : "s3:deleteObject",
+							"Resource" : { "Fn::Join" : [ "", [ "arn:aws:s3:::", { "Ref" : "S3ConfigFile" } ] ] }
+						}, {
+							"Effect" : "Allow",
+							"Action" : "s3:deleteBucket",
+							"Resource" : { "Fn::Join" : [ "", [ "arn:aws:s3:::", { "Ref" : "S3DeleteBucket" } ] ] }
+						} ]
+					}
+				} ]
+			}
+		},
+
+		"ActivateAlarmFunctionRole" : {
+			"Type" : "AWS::IAM::Role",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"AssumeRolePolicyDocument" : {
+					"Version" : "2012-10-17",
+					"Statement" : [ {
+						"Effect" : "Allow",
+						"Action" : [ "sts:AssumeRole" ],
+						"Principal" : {
+							"Service" : [ "lambda.amazonaws.com" ]
+						}
+					} ]
+				},
+				"Policies" : [ {
+					"PolicyName" : "lambda_basic_exection",
+					"PolicyDocument" : {
+						"Version" : "2012-10-17",
+						"Statement" : [ {
+							"Effect" : "Allow",
+							"Action" : [
+								"logs:CreateLogGroup",
+								"logs:CreateLogStream",
+								"logs:PutLogEvents"
+							],
+							"Resource" : "arn:aws:logs:*:*:*"
+						} ]
+					}
+				}, {
+					"PolicyName" : "lambda_alarm_policy",
+					"PolicyDocument" : {
+						"Version" : "2012-10-17",
+						"Statement" : [ {
+							"Effect" : "Allow",
+							"Action" : [
+								"cloudwatch:putMetricData"
+							],
+							"Resource" : "*"
+						} ]
+					}
+				} ]
+			}
+		},
+
+		"PlumbingFunctionRole" : {
+			"Type" : "AWS::IAM::Role",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"AssumeRolePolicyDocument" : {
+					"Version" : "2012-10-17",
+					"Statement" : [ {
+						"Effect" : "Allow",
+						"Action" : [ "sts:AssumeRole" ],
+						"Principal" : {
+							"Service" : [ "lambda.amazonaws.com" ]
+						}
+					} ]
+				},
+				"Policies" : [ {
+					"PolicyName" : "lambda_basic_exection",
+					"PolicyDocument" : {
+						"Version" : "2012-10-17",
+						"Statement" : [ {
+							"Effect" : "Allow",
+							"Action" : [
+								"logs:CreateLogGroup",
+								"logs:CreateLogStream",
+								"logs:PutLogEvents"
+							],
+							"Resource" : "arn:aws:logs:*:*:*"
+						} ]
+					}
+				}, {
+					"PolicyName" : "lambda_plumbing_policy",
+					"PolicyDocument" : {
+						"Version" : "2012-10-17",
+						"Statement" : [ {
+							"Effect" : "Allow",
+							"Action" : [
+								"lambda:addPermission"
+							],
+							"Resource" : { "Fn::GetAtt" : [ "LeaseFunction", "Arn" ] }
+						} ]
+					}
+				} ]
+			}
+		},
+
+		"SecurityGroup" : {
+			"Type" : "AWS::EC2::SecurityGroup",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"GroupDescription" : "SSH and HTCondor.",
+				"VpcId" : { "Ref" : "VPC" },
+				"SecurityGroupIngress" : [
+					{ "IpProtocol" : "tcp", "FromPort" : 22, "ToPort" : 22, "CidrIp" : "0.0.0.0/0" },
+					{ "IpProtocol" : "tcp", "FromPort" : 9618, "ToPort" : 9618, "CidrIp" : "0.0.0.0/0" }
+				]
+			}
+		},
+
+		"InstanceRole" : {
+			"Type" : "AWS::IAM::Role",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"AssumeRolePolicyDocument" : {
+					"Version" : "2012-10-17",
+					"Statement" : [
+						{
+							"Effect" : "Allow",
+							"Principal" : {
+								"Service" : [ "ec2.amazonaws.com" ]
+							},
+							"Action" : [ "sts:AssumeRole" ]
+						}
+					]
+				},
+				"Policies" : [
+					{
+						"PolicyName" : "lambda_basic_exection",
+						"PolicyDocument" : {
+							"Version" : "2012-10-17",
+							"Statement" : [
+								{
+									"Effect" : "Allow",
+									"Action" : [
+										"logs:CreateLogGroup",
+										"logs:CreateLogStream",
+										"logs:PutLogEvents"
+									],
+									"Resource" : "arn:aws:logs:*:*:*"
+								}
+							]
+						}
+					},
+					{
+						"PolicyName" : "SecurityTokenAccess",
+						"PolicyDocument" : {
+							"Version" : "2012-10-17",
+							"Statement" : [
+								{
+									"Effect" : "Allow",
+									"Action" : "s3:GetObject",
+									"Resource" : { "Fn::Join" : [ "", [ "arn:aws:s3:::", { "Ref" : "S3PoolPassword" } ] ] }
+								},
+								{
+									"Effect" : "Allow",
+									"Action" : "s3:GetObject",
+									"Resource" : { "Fn::Join" : [ "", [ "arn:aws:s3:::", { "Ref" : "S3ConfigFile" } ] ] }
+								},
+								{
+									"Effect" : "Allow",
+									"Action" : [
+										"autoscaling:DetachInstances",
+										"cloudformation:DescribeStackResource",
+										"ec2:ModifyInstanceAttribute"
+									],
+									"Resource" : "*"
+								}
+							]
+						}
+					}
+				]
+			}
+		},
+
+
+"SpotFleet" : {
+	"Type" : "AWS::EC2::SpotFleet",
+	"Condition" : "CreateSpotFleet",
+	"Properties" : {
+		"SpotFleetRequestConfigData" : {
+			"AllocationStrategy" : "lowestPrice",
+			"ExcessCapacityTerminationPolicy" : "Default",
+			"IamFleetRole" : "arn:aws:iam::844603466475:role/aws-ec2-spot-fleet-role",
+			"SpotPrice" : "0.05",
+			"TargetCapacity" : "1",
+			"TerminateInstancesWithExpiration": "true",
+			"LaunchSpecifications" : [
+				{ "Fn::If" : [ "IsDedicatedInstance-3",
+					"AWS::NoValue",
+					{
+						"IamInstanceProfile" : { "Arn" : { "Fn::GetAtt" : [ "InstanceProfile", "Arn" ] } },
+						"ImageId" : { "Ref" : "ImageID3" },
+						"InstanceType" : { "Ref" : "InstanceType3" },
+						"KeyName" : { "Ref" : "SSHKeypairName" }
+					}
+					]
+				},
+				{ "Fn::If" : [ "IsDedicatedInstance-2",
+					"AWS::NoValue",
+					{
+						"IamInstanceProfile" : { "Arn" : { "Fn::GetAtt" : [ "InstanceProfile", "Arn" ] } },
+						"ImageId" : { "Ref" : "ImageID2" },
+						"InstanceType" : { "Ref" : "InstanceType2" },
+						"KeyName" : { "Ref" : "SSHKeypairName" }
+					}
+					]
+				}
+			]
+		}
+	}
+},
+
+
+		"InstanceProfile" : {
+			"Type" : "AWS::IAM::InstanceProfile",
+			"DependsOn" : "InstanceRole",
+			"Properties" : {
+				"Path" : "/",
+				"Roles" : [ { "Ref" : "InstanceRole" } ]
+			}
+		},
+
+
+		"LaunchConfiguration" : {
+			"Type" : "AWS::CloudFormation::Stack",
+			"DependsOn" : "LeaseFunctionRole",
+			"Metadata" : {
+				"AWS::CloudFormation::Init" : {
+					"configSets" : {
+						"install" : [ "add-repo", "install-condor", "config-condor" ],
+						"preinstalled" : [ "config-condor" ]
+					},
+
+					"add-repo" : {
+						"files" : {
+							"/etc/yum.repos.d/htcondor-stable.repo" : {
+								"source" : "https://research.cs.wisc.edu/htcondor/yum/repo.d/htcondor-stable-rhel6.repo"
+							},
+							"/etc/yum.repos.d/RPM-GPG-KEY-HTCondor" : {
+								"source" : "http://research.cs.wisc.edu/htcondor/yum/RPM-GPG-KEY-HTCondor"
+							}
+						},
+						"commands" : {
+							"add-key" : {
+								"command" : "rpm --import /etc/yum.repos.d/RPM-GPG-KEY-HTCondor"
+							}
+						}
+					},
+
+					"install-condor" : {
+						"packages" : {
+							"yum" : { "condor" : [] }
+						}
+					},
+
+					"config-condor" : {
+						"files" : {
+							"/etc/condor/shutdown" : {
+								"content" : { "Fn::Join" : [ "", [
+"#!/bin/sh\n",
+"SHUTDOWN=`/sbin/runlevel | /usr/bin/awk '{print $2}'`\n",
+"SHUTDOWN_MESSAGE='because instance is being terminated'\n",
+"if [ ${SHUTDOWN} -ne 0 ]; then\n",
+"    SHUTDOWN_MESSAGE='for lack of work'\n",
+"    /usr/bin/aws autoscaling detach-instances ",
+	"--region ", { "Ref" : "AWS::Region" }, " ",
+	"--instance-ids ",
+		"$(/usr/bin/curl -s http://169.254.169.254/latest/meta-data/instance-id) ",
+	"--auto-scaling-group-name ",
+		"$(/usr/bin/aws cloudformation describe-stack-resource ",
+			"--region ", { "Ref" : "AWS::Region" }, " ",
+			"--stack-name ", { "Ref" : "AWS::StackName" }, " ",
+			"--logical-resource-id AutoScalingGroup$(/bin/cat /etc/asg-index) ",
+			"| /bin/awk '/PhysicalResourceId/{print $2}' ",
+			"| /bin/sed -e's/[\",]//g') ",
+	"--should-decrement-desired-capacity\n",
+"fi\n",
+"NOW=`/bin/date +%s`\n",
+"NOW=\"${NOW}000\"\n",
+"INSTANCE_ID=$(/usr/bin/curl -s http://169.254.169.254/latest/meta-data/instance-id)\n",
+"MESSAGE=\"$(/bin/date) Instance ${INSTANCE_ID} shutting down ${SHUTDOWN_MESSAGE}.\"\n",
+"/usr/bin/aws logs create-log-group ",
+    "--region ", { "Ref" : "AWS::Region" }, " ",
+    "--log-group-name shutdowns\n",
+"/usr/bin/aws logs create-log-stream ",
+	"--region ", { "Ref" : "AWS::Region" }, " ",
+    "--log-group-name shutdowns ",
+    "--log-stream-name ${INSTANCE_ID}\n",
+"/usr/bin/aws logs put-log-events ",
+	"--region ", { "Ref" : "AWS::Region" }, " ",
+    "--log-group-name shutdowns ",
+    "--log-stream-name ${INSTANCE_ID} ",
+    "--log-events \"timestamp=${NOW},message=${MESSAGE}\"\n",
+"/usr/bin/aws ec2 modify-instance-attribute ",
+	"--region ", { "Ref" : "AWS::Region" }, " ",
+	"--instance-id ",
+		"$(/usr/bin/curl -s http://169.254.169.254/latest/meta-data/instance-id) ",
+	"--attribute instanceInitiatedShutdownBehavior ",
+	"--value terminate\n",
+"/sbin/shutdown -h now\n"
+								]]}
+							},
+							"/etc/condor/config.d/annex" : {
+								"content" : { "Fn::Join" : [ "", [
+									"# We're just an execute node.\n",
+									"DAEMON_LIST = MASTER, STARTD\n",
+									"# Use pool password security.\n",
+									"COLLECTOR_HOST = ", { "Ref" : "CentralManager" }, "\n",
+									"SEC_CLIENT_AUTHENTICATION_METHODS = FS, PASSWORD\n",
+									"SEC_DEFAULT_AUTHENTICATION_METHODS = FS, PASSWORD\n",
+									"SEC_ENABLE_MATCH_PASSWORD_AUTHENTICATION = TRUE\n",
+									"SEC_PASSWORD_FILE = /etc/condor/password\n",
+									"ALLOW_OWNER = $(ALLOW_OWNER) condor_pool@*/*\n",
+									"# Advertise our project ID.\n",
+									"ProjectID = \"", { "Ref" : "ProjectID" }, "\"\n",
+									"STARTD_ATTRS = $(STARTD_ATTRS) ProjectID\n",
+									"# Don't wait more than fifteen minutes for a job.\n",
+									"STARTD_NOCLAIM_SHUTDOWN = 900\n",
+									"# Suicide when the startd does.\n",
+									"# If we were sure that STARTD_StartTime was unset (rather than 0), we could skip the 60-second time-out.\n",
+									"MASTER.DAEMON_SHUTDOWN_FAST = ( STARTD_StartTime == 0 ) && ((CurrentTime - DaemonStartTime) > 60)\n",
+									"# We don't enforce the lease here because we don't want to manage updating it.\n",
+									"# On shutdown, take the machine with us.\n",
+									"MASTER_SHUTDOWN_SHUTDOWN = /etc/condor/shutdown\n",
+									"# Simplify security group configuration.\n",
+									"USE_SHARED_PORT = TRUE\n",
+									"# $(FULL_HOSTNAME) resolves to the private IP, which we don't check for some reason.\n",
+									"CONDOR_HOST = $(TCP_FORWARDING_HOST)\n",
+									"# Encrypt data at rest to minimize risk of loss.\n",
+									"ENCRYPT_EXECUTE_DIRECTORY = TRUE\n"
+								]]}
+							}
+						},
+						"commands" : {
+							"AA-download-password" : {
+								"command" : { "Fn::Join" : [ "", [
+									"aws s3 cp s3://",
+									{ "Ref" : "S3PoolPassword" }, " ",
+									"/etc/condor/password"
+								]]}
+							},
+							"BB-chmod-shutdown" : {
+								"command" : "chmod 755 /etc/condor/shutdown"
+							},
+							"CC-ec2-public-ip" : {
+								"command" : "echo EC2PublicIP = $(/usr/bin/curl -s http://169.254.169.254/latest/meta-data/public-ipv4) >> /etc/condor/config.d/ec2.local"
+							},
+							"DD-ec2-instance-id" : {
+								"command" : "echo EC2InstanceID = \"$(/usr/bin/curl -s http://169.254.169.254/latest/meta-data/instance-id)\" >> /etc/condor/config.d/ec2.local"
+							},
+							"EE-ec2-startd-attrs" : {
+								"command" : "echo 'STARTD_ATTRS = $(STARTD_ATTRS) EC2InstanceID' >> /etc/condor/config.d/ec2.local"
+							},
+							"FF-ec2-tcp-fowarding-host" : {
+								"command" : "echo 'TCP_FORWARDING_HOST = $(EC2PublicIP)' >> /etc/condor/config.d/ec2.local"
+							},
+							"GG-download-config" : {
+								"command" : { "Fn::If" :  [ "ConfigCondor",
+								{ "Fn::Join" : [ "", [ "aws s3 cp s3://", { "Ref" : "S3ConfigFile" }, " ", "/etc/condor/config.d/" ]]},
+								"echo 'No config to download'"
+								] }
+							},
+							"YY-restart-condor" : {
+								"command" : "service condor restart"
+							},
+							"ZZ-condor-shutdown" : {
+								"command" : "while ! condor_set_shutdown -exec shutdown; do sleep 1; done"
+							}
+						}
+
+					}
+				}
+			},
+			"Properties" : {
+				"TemplateURL" : { "Fn::Join" : [ "", [ { "Ref" : "TemplateURL" }, { "Fn::FindInMap" : [ "VersionNumber", "CurrentVersion", "Number" ] } ] ] },
+				"Parameters" : {
+					"Index" : "1",
+					"ImageID" : { "Ref" : "ImageID1" },
+					"SpotPrice" : { "Ref" : "SpotPrice1" },
+					"InstanceType" : { "Ref" : "InstanceType1" },
+					"SecurityGroup" : { "Ref" : "SecurityGroup" },
+					"SSHKeypairName" : { "Ref" : "SSHKeypairName" },
+					"ParentStackName" : { "Ref" : "AWS::StackName" },
+					"InstanceProfileArn" : { "Fn::GetAtt" : [ "InstanceProfile", "Arn" ] }
+				}
+			}
+		},
+
+		"AutoScalingGroup1" : {
+			"Condition" : "Config1",
+			"Type" : "AWS::AutoScaling::AutoScalingGroup",
+			"DependsOn" : "InstanceProfile",
+			"Properties" : {
+				"MinSize" : 0,
+				"DesiredCapacity" : 0,
+				"MaxSize" : { "Ref" : "Size" },
+				"LaunchConfigurationName" : { "Fn::GetAtt" : [ "LaunchConfiguration", "Outputs.LaunchConfigurationName" ] },
+				"VPCZoneIdentifier" : { "Ref" : "VPCSubnets" },
+				"Tags" : [
+					{
+						"Key" : "ProjectID",
+						"Value" : { "Ref" : "ProjectID" },
+						"PropagateAtLaunch" : "true"
+					}
+				]
+			}
+		},
+
+		"LaunchConfiguration2" : {
+			"Condition" : "Config2",
+			"Type" : "AWS::CloudFormation::Stack",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"TemplateURL" : { "Fn::Join" : [ "", [ { "Ref" : "TemplateURL" }, { "Fn::FindInMap" : [ "VersionNumber", "CurrentVersion", "Number" ] } ] ] },
+				"Parameters" : {
+					"Index" : "2",
+					"ImageID" : { "Ref" : "ImageID2" },
+					"SpotPrice" : { "Ref" : "SpotPrice2" },
+					"InstanceType" : { "Ref" : "InstanceType2" },
+					"SecurityGroup" : { "Ref" : "SecurityGroup" },
+					"SSHKeypairName" : { "Ref" : "SSHKeypairName" },
+					"ParentStackName" : { "Ref" : "AWS::StackName" },
+					"InstanceProfileArn" : { "Fn::GetAtt" : [ "InstanceProfile", "Arn" ] }
+				}
+			}
+		},
+
+		"AutoScalingGroup2" : {
+			"Condition" : "Config2",
+			"Type" : "AWS::AutoScaling::AutoScalingGroup",
+			"DependsOn" : "InstanceProfile",
+			"Properties" : {
+				"MinSize" : 0,
+				"DesiredCapacity" : 0,
+				"MaxSize" : { "Ref" : "Size" },
+				"LaunchConfigurationName" : { "Fn::GetAtt" : [ "LaunchConfiguration2", "Outputs.LaunchConfigurationName" ] },
+				"VPCZoneIdentifier" : { "Ref" : "VPCSubnets" },
+				"Tags" : [
+					{
+						"Key" : "ProjectID",
+						"Value" : { "Ref" : "ProjectID" },
+						"PropagateAtLaunch" : "true"
+					}
+				]
+			}
+		},
+
+		"LaunchConfiguration3" : {
+			"Condition" : "Config3",
+			"Type" : "AWS::CloudFormation::Stack",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"TemplateURL" : { "Fn::Join" : [ "", [ { "Ref" : "TemplateURL" }, { "Fn::FindInMap" : [ "VersionNumber", "CurrentVersion", "Number" ] } ] ] },
+				"Parameters" : {
+					"Index" : "3",
+					"ImageID" : { "Ref" : "ImageID3" },
+					"SpotPrice" : { "Ref" : "SpotPrice3" },
+					"InstanceType" : { "Ref" : "InstanceType3" },
+					"SecurityGroup" : { "Ref" : "SecurityGroup" },
+					"SSHKeypairName" : { "Ref" : "SSHKeypairName" },
+					"ParentStackName" : { "Ref" : "AWS::StackName" },
+					"InstanceProfileArn" : { "Fn::GetAtt" : [ "InstanceProfile", "Arn" ] }
+				}
+			}
+		},
+
+		"AutoScalingGroup3" : {
+			"Condition" : "Config3",
+			"Type" : "AWS::AutoScaling::AutoScalingGroup",
+			"DependsOn" : "InstanceProfile",
+			"Properties" : {
+				"MinSize" : 0,
+				"DesiredCapacity" : 0,
+				"MaxSize" : { "Ref" : "Size" },
+				"LaunchConfigurationName" : { "Fn::GetAtt" : [ "LaunchConfiguration3", "Outputs.LaunchConfigurationName" ] },
+				"VPCZoneIdentifier" : { "Ref" : "VPCSubnets" },
+				"Tags" : [
+					{
+						"Key" : "ProjectID",
+						"Value" : { "Ref" : "ProjectID" },
+						"PropagateAtLaunch" : "true"
+					}
+				]
+			}
+		},
+
+		"LaunchConfiguration4" : {
+			"Condition" : "Config4",
+			"Type" : "AWS::CloudFormation::Stack",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"TemplateURL" : { "Fn::Join" : [ "", [ { "Ref" : "TemplateURL" }, { "Fn::FindInMap" : [ "VersionNumber", "CurrentVersion", "Number" ] } ] ] },
+				"Parameters" : {
+					"Index" : "4",
+					"ImageID" : { "Ref" : "ImageID4" },
+					"SpotPrice" : { "Ref" : "SpotPrice4" },
+					"InstanceType" : { "Ref" : "InstanceType4" },
+					"SecurityGroup" : { "Ref" : "SecurityGroup" },
+					"SSHKeypairName" : { "Ref" : "SSHKeypairName" },
+					"ParentStackName" : { "Ref" : "AWS::StackName" },
+					"InstanceProfileArn" : { "Fn::GetAtt" : [ "InstanceProfile", "Arn" ] }
+				}
+			}
+		},
+
+		"AutoScalingGroup4" : {
+			"Condition" : "Config4",
+			"Type" : "AWS::AutoScaling::AutoScalingGroup",
+			"DependsOn" : "InstanceProfile",
+			"Properties" : {
+				"MinSize" : 0,
+				"DesiredCapacity" : 0,
+				"MaxSize" : { "Ref" : "Size" },
+				"LaunchConfigurationName" : { "Fn::GetAtt" : [ "LaunchConfiguration4", "Outputs.LaunchConfigurationName" ] },
+				"VPCZoneIdentifier" : { "Ref" : "VPCSubnets" },
+				"Tags" : [
+					{
+						"Key" : "ProjectID",
+						"Value" : { "Ref" : "ProjectID" },
+						"PropagateAtLaunch" : "true"
+					}
+				]
+			}
+		},
+
+		"LaunchConfiguration5" : {
+			"Condition" : "Config5",
+			"Type" : "AWS::CloudFormation::Stack",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"TemplateURL" : { "Fn::Join" : [ "", [ { "Ref" : "TemplateURL" }, { "Fn::FindInMap" : [ "VersionNumber", "CurrentVersion", "Number" ] } ] ] },
+				"Parameters" : {
+					"Index" : "5",
+					"ImageID" : { "Ref" : "ImageID5" },
+					"SpotPrice" : { "Ref" : "SpotPrice5" },
+					"InstanceType" : { "Ref" : "InstanceType5" },
+					"SecurityGroup" : { "Ref" : "SecurityGroup" },
+					"SSHKeypairName" : { "Ref" : "SSHKeypairName" },
+					"ParentStackName" : { "Ref" : "AWS::StackName" },
+					"InstanceProfileArn" : { "Fn::GetAtt" : [ "InstanceProfile", "Arn" ] }
+				}
+			}
+		},
+
+		"AutoScalingGroup5" : {
+			"Condition" : "Config5",
+			"Type" : "AWS::AutoScaling::AutoScalingGroup",
+			"DependsOn" : "InstanceProfile",
+			"Properties" : {
+				"MinSize" : 0,
+				"DesiredCapacity" : 0,
+				"MaxSize" : { "Ref" : "Size" },
+				"LaunchConfigurationName" : { "Fn::GetAtt" : [ "LaunchConfiguration5", "Outputs.LaunchConfigurationName" ] },
+				"VPCZoneIdentifier" : { "Ref" : "VPCSubnets" },
+				"Tags" : [
+					{
+						"Key" : "ProjectID",
+						"Value" : { "Ref" : "ProjectID" },
+						"PropagateAtLaunch" : "true"
+					}
+				]
+			}
+		},
+
+		"LaunchConfiguration6" : {
+			"Condition" : "Config6",
+			"Type" : "AWS::CloudFormation::Stack",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"TemplateURL" : { "Fn::Join" : [ "", [ { "Ref" : "TemplateURL" }, { "Fn::FindInMap" : [ "VersionNumber", "CurrentVersion", "Number" ] } ] ] },
+				"Parameters" : {
+					"Index" : "6",
+					"ImageID" : { "Ref" : "ImageID6" },
+					"SpotPrice" : { "Ref" : "SpotPrice6" },
+					"InstanceType" : { "Ref" : "InstanceType6" },
+					"SecurityGroup" : { "Ref" : "SecurityGroup" },
+					"SSHKeypairName" : { "Ref" : "SSHKeypairName" },
+					"ParentStackName" : { "Ref" : "AWS::StackName" },
+					"InstanceProfileArn" : { "Fn::GetAtt" : [ "InstanceProfile", "Arn" ] }
+				}
+			}
+		},
+
+		"AutoScalingGroup6" : {
+			"Condition" : "Config6",
+			"Type" : "AWS::AutoScaling::AutoScalingGroup",
+			"DependsOn" : "InstanceProfile",
+			"Properties" : {
+				"MinSize" : 0,
+				"DesiredCapacity" : 0,
+				"MaxSize" : { "Ref" : "Size" },
+				"LaunchConfigurationName" : { "Fn::GetAtt" : [ "LaunchConfiguration6", "Outputs.LaunchConfigurationName" ] },
+				"VPCZoneIdentifier" : { "Ref" : "VPCSubnets" },
+				"Tags" : [
+					{
+						"Key" : "ProjectID",
+						"Value" : { "Ref" : "ProjectID" },
+						"PropagateAtLaunch" : "true"
+					}
+				]
+			}
+		},
+
+		"LaunchConfiguration7" : {
+			"Condition" : "Config7",
+			"Type" : "AWS::CloudFormation::Stack",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"TemplateURL" : { "Fn::Join" : [ "", [ { "Ref" : "TemplateURL" }, { "Fn::FindInMap" : [ "VersionNumber", "CurrentVersion", "Number" ] } ] ] },
+				"Parameters" : {
+					"Index" : "7",
+					"ImageID" : { "Ref" : "ImageID7" },
+					"SpotPrice" : { "Ref" : "SpotPrice7" },
+					"InstanceType" : { "Ref" : "InstanceType7" },
+					"SecurityGroup" : { "Ref" : "SecurityGroup" },
+					"SSHKeypairName" : { "Ref" : "SSHKeypairName" },
+					"ParentStackName" : { "Ref" : "AWS::StackName" },
+					"InstanceProfileArn" : { "Fn::GetAtt" : [ "InstanceProfile", "Arn" ] }
+				}
+			}
+		},
+
+		"AutoScalingGroup7" : {
+			"Condition" : "Config7",
+			"Type" : "AWS::AutoScaling::AutoScalingGroup",
+			"DependsOn" : "InstanceProfile",
+			"Properties" : {
+				"MinSize" : 0,
+				"DesiredCapacity" : 0,
+				"MaxSize" : { "Ref" : "Size" },
+				"LaunchConfigurationName" : { "Fn::GetAtt" : [ "LaunchConfiguration7", "Outputs.LaunchConfigurationName" ] },
+				"VPCZoneIdentifier" : { "Ref" : "VPCSubnets" },
+				"Tags" : [
+					{
+						"Key" : "ProjectID",
+						"Value" : { "Ref" : "ProjectID" },
+						"PropagateAtLaunch" : "true"
+					}
+				]
+			}
+		},
+
+		"LaunchConfiguration8" : {
+			"Condition" : "Config8",
+			"Type" : "AWS::CloudFormation::Stack",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"TemplateURL" : { "Fn::Join" : [ "", [ { "Ref" : "TemplateURL" }, { "Fn::FindInMap" : [ "VersionNumber", "CurrentVersion", "Number" ] } ] ] },
+				"Parameters" : {
+					"Index" : "8",
+					"ImageID" : { "Ref" : "ImageID8" },
+					"SpotPrice" : { "Ref" : "SpotPrice8" },
+					"InstanceType" : { "Ref" : "InstanceType8" },
+					"SecurityGroup" : { "Ref" : "SecurityGroup" },
+					"SSHKeypairName" : { "Ref" : "SSHKeypairName" },
+					"ParentStackName" : { "Ref" : "AWS::StackName" },
+					"InstanceProfileArn" : { "Fn::GetAtt" : [ "InstanceProfile", "Arn" ] }
+				}
+			}
+		},
+
+		"AutoScalingGroup8" : {
+			"Condition" : "Config8",
+			"Type" : "AWS::AutoScaling::AutoScalingGroup",
+			"DependsOn" : "InstanceProfile",
+			"Properties" : {
+				"MinSize" : 0,
+				"DesiredCapacity" : 0,
+				"MaxSize" : { "Ref" : "Size" },
+				"LaunchConfigurationName" : { "Fn::GetAtt" : [ "LaunchConfiguration8", "Outputs.LaunchConfigurationName" ] },
+				"VPCZoneIdentifier" : { "Ref" : "VPCSubnets" },
+				"Tags" : [
+					{
+						"Key" : "ProjectID",
+						"Value" : { "Ref" : "ProjectID" },
+						"PropagateAtLaunch" : "true"
+					}
+				]
+			}
+		},
+
+
+		"LeaseFunction" : {
+			"Type" : "AWS::Lambda::Function",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"Code" : {
+					"S3Bucket" : { "Fn::Join" : [ "-", [ "condor-annex", { "Ref" : "AWS::Region" } ] ] },
+					"S3Key" : { "Fn::Join" : [ "", [
+						"lease-function-",
+						{ "Fn::FindInMap" : [ "VersionNumber", "CurrentVersion", "Number" ] },
+						".jar"
+					] ]
+					}
+				},
+				"Description" : "Deletes the CloudFormation stack identified by the namespace of the triggering metric.",
+				"Handler" : "org.HTCondor.Lease",
+				"MemorySize" : 256,
+				"Role" : { "Fn::GetAtt" : [ "LeaseFunctionRole", "Arn" ] },
+				"Runtime" : "java8",
+				"Timeout" : 30
+			}
+		},
+
+		"Topic" : {
+			"Type" : "AWS::SNS::Topic",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"Subscription" : [ {
+					"Protocol" : "lambda",
+					"Endpoint" : { "Fn::GetAtt" : [ "LeaseFunction", "Arn" ] }
+				} ]
+			}
+		},
+
+		"Alarm" : {
+			"Type" : "AWS::CloudWatch::Alarm",
+			"DependsOn" : "LeaseFunctionRole",
+			"Properties" : {
+				"AlarmDescription" : "Remove ASG if not alive.",
+				"MetricName" : "Lease",
+				"Namespace" : { "Fn::Join" :
+					[ "/",
+						[
+							"HTCondor",
+							"Leases",
+							"CloudFormation",
+							{ "Ref" : "AWS::StackName" }
+						]
+					]
+				},
+				"Statistic" : "Sum",
+				"Period" : 60,
+				"EvaluationPeriods" : { "Ref" : "LeaseDuration" },
+				"Threshold" : 1,
+				"ComparisonOperator" : "LessThanThreshold",
+				"AlarmActions" : [ { "Ref" : "Topic" } ],
+				"InsufficientDataActions" : [ { "Ref" : "Topic" } ]
+			}
+		},
+
+		"CleanUpFunction" : {
+			"Type" : "AWS::Lambda::Function",
+			"DependsOn" : "CleanUpFunctionRole",
+			"Properties" : {
+				"Code" : {
+					"S3Bucket" : { "Fn::Join" : [ "-", [ "condor-annex", { "Ref" : "AWS::Region" } ] ] },
+					"S3Key" : { "Fn::Join" : [ "", [
+						"cleanup-",
+						{ "Fn::FindInMap" : [ "VersionNumber", "CurrentVersion", "Number" ] },
+						".zip"
+					] ]
+					}
+				},
+				"Description" : "Removes stray subscriptions (a CloudFormation work-around) and deletes the S3 bucket.",
+				"Handler" : "cleanup.handler",
+				"Runtime" : "nodejs",
+				"Role" : { "Fn::GetAtt" : [ "CleanUpFunctionRole", "Arn" ] },
+				"Timeout" : 30
+			}
+		},
+
+		"CleanUp" : {
+			"Type" : "Custom::CleanUp",
+			"DependsOn" : "CleanUpFunction",
+			"Properties" : {
+				"ServiceToken" : { "Fn::GetAtt" : [ "CleanUpFunction", "Arn" ] },
+				"topicARN" : { "Ref" : "Topic" },
+				"s3PoolPassword" : { "Ref" : "S3PoolPassword" },
+				"s3DeleteBucket" : { "Ref" : "S3DeleteBucket" },
+				"s3ConfigFile" : { "Ref" : "S3ConfigFile" }
+			}
+		},
+
+		"PlumbingFunction" : {
+			"Type" : "AWS::Lambda::Function",
+			"DependsOn" : "PlumbingFunctionRole",
+			"Properties" : {
+				"Code" : {
+					"ZipFile" : { "Fn::Join" : [ "\n" , [
+	"var response = require( 'cfn-response' );",
+	"exports.handler = function( event, context ) {",
+	"console.log( 'Received request:\\n', JSON.stringify( event ) );",
+	"if( event.RequestType == 'Delete' ) {",
+	"   // Delete subscription?",
+	"   response.send( event, context, response.SUCCESS );",
+	"   return;",
+	"}",
+	"var functionName = event.ResourceProperties.functionName;",
+	"var sourceArn = event.ResourceProperties.sourceArn;",
+	"var responseData = {};",
+	"if( sourceArn ) {",
+	"   var AWS = require( 'aws-sdk' );",
+	"   var lambda = new AWS.Lambda();",
+	"   var params = {  Action : 'lambda:InvokeFunction',",
+	"                   FunctionName : functionName,",
+	"                   Principal : 'sns.amazonaws.com',",
+	"                   StatementId : 'Condor-Annex-Permissions',",
+	"                   SourceArn : sourceArn",
+	"   };",
+	"   lambda.addPermission( params, function( error, data ) {",
+	"       if( error ) {",
+	"           console.log( error, error.stack );",
+	"           responseData = { Error : 'addPermission() call failed' };",
+	"           response.send( event, context, response.FAILED, responseData );",
+	"           return;",
+	"       } else {",
+	"           console.log( data );",
+	"           response.send( event, context, response.SUCCESS );",
+	"           return;",
+	"       }",
+	"   });",
+	"} else {",
+	"   responseData = { Error : 'sourceArn not specified' };",
+	"   console.log( responseData.Error );",
+	"   response.send( event, context, response.FAILED, responseData );",
+	"}",
+"};"
+						]]}
+				},
+				"Description" : "Permits the given source to call the given function.  (A CloudFormation work-around.)",
+				"Handler" : "index.handler",
+				"Runtime" : "nodejs",
+				"Role" : { "Fn::GetAtt" : [ "PlumbingFunctionRole", "Arn" ] },
+				"Timeout" : 30
+			}
+		},
+
+		"Plumbing" : {
+			"Type" : "Custom::Plumbing",
+			"DependsOn" : "PlumbingFunction",
+			"Properties" : {
+				"ServiceToken" : { "Fn::GetAtt" : [ "PlumbingFunction", "Arn" ] },
+				"functionName" : { "Ref" : "LeaseFunction" },
+				"sourceArn" : { "Ref" : "Topic" }
+			}
+		},
+
+		"ActivateAlarm" : {
+			"Type" : "AWS::Lambda::Function",
+			"DependsOn" : "ActivateAlarmFunctionRole",
+			"Properties" : {
+				"Code" : {
+					"ZipFile" : { "Fn::Join" : [ "\n" , [
+	"var response = require( 'cfn-response' );",
+	"exports.handler = function( event, context ) {",
+	"console.log( 'Received request:\\n', JSON.stringify( event ) );",
+	"if( event.RequestType == 'Delete' ) {",
+	"   response.send( event, context, response.SUCCESS );",
+	"   return;",
+	"}",
+	"var namespace = event.ResourceProperties.Namespace;",
+	"var responseData = {};",
+	"if( namespace ) {",
+	"   var AWS = require( 'aws-sdk' );",
+	"   var cloudWatch = new AWS.CloudWatch();",
+	"   var params = { MetricData : [ {",
+	"           MetricName : 'Lease',",
+	"           Value : 1",
+	"       } ],",
+	"       Namespace : namespace",
+	"   };",
+	"   cloudWatch.putMetricData( params, function( error, data ) {",
+	"       if( error ) {",
+	"           console.log( error, error.stack );",
+	"           responseData = { Error : 'putMetricData() call failed' };",
+	"           response.send( event, context, response.FAILED, responseData );",
+	"           return;",
+	"       } else {",
+	"           console.log( data );",
+	"           response.send( event, context, response.SUCCESS );",
+	"           return;",
+	"       }",
+	"   });",
+	"} else {",
+	"   responseData = { Error : 'Namespace not specified' };",
+	"   console.log( responseData.Error );",
+	"   response.send( event, context, response.FAILED, responseData );",
+	"}",
+"};"
+						]]}
+				},
+				"Description" : "Initializes the lease.",
+				"Handler" : "index.handler",
+				"Runtime" : "nodejs",
+				"Role" : { "Fn::GetAtt" : [ "ActivateAlarmFunctionRole", "Arn" ] },
+				"Timeout" : 30
+			}
+		},
+
+		"ActiveAlarm" : {
+			"Type" : "Custom::ActiveAlarm",
+			"DependsOn" : "ActivateAlarm",
+			"Properties" : {
+				"ServiceToken" : { "Fn::GetAtt" : [ "ActivateAlarm", "Arn" ] },
+				"Namespace" : { "Fn::Join" :
+					[ "/",
+						[
+							"HTCondor",
+							"Leases",
+							"CloudFormation",
+							{ "Ref" : "AWS::StackName" }
+						]
+					] }
+				}
+			}
+	},
+
+	"Outputs" : {
+	}
+}
