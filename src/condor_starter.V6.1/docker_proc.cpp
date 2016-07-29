@@ -39,7 +39,7 @@ static void buildExtraVolumes(std::list<std::string> &extras);
 // the full container ID as (part of) the cgroup identifier(s).
 //
 
-DockerProc::DockerProc( ClassAd * jobAd ) : VanillaProc( jobAd ) { }
+DockerProc::DockerProc( ClassAd * jobAd ) : VanillaProc( jobAd ), updateTid(-1) { }
 
 DockerProc::~DockerProc() { }
 
@@ -66,10 +66,12 @@ int DockerProc::StartJob() {
 	// introducing a version dependency -- assume the executable was
 	// transferred unless it was explicitly noted otherwise.
 	//
+	
 	bool transferExecutable = true;
 	JobAd->LookupBool( ATTR_TRANSFER_EXECUTABLE, transferExecutable );
 	if( transferExecutable ) {
-		command = sandboxPath + "/" + command;
+		// Transfered executables are still renamed (sadly)
+		command = "./condor_exec.exe";
 	}
 
 	ArgList args;
@@ -136,15 +138,22 @@ int DockerProc::StartJob() {
 	std::list<std::string> extras;
 	buildExtraVolumes(extras);
 
-	int rv = DockerAPI::run( *machineAd, containerName, imageID, command, args, job_env, sandboxPath, extras, JobPid, childFDs, err );
+	// The following line is for condor_who to parse
+	dprintf( D_ALWAYS, "About to exec docker:%s\n", command.c_str());
+	int rv = DockerAPI::run( *machineAd, *JobAd, containerName, imageID, command, args, job_env, sandboxPath, extras, JobPid, childFDs, err );
 	if( rv < 0 ) {
 		dprintf( D_ALWAYS | D_FAILURE, "DockerAPI::run( %s, %s, ... ) failed with return value %d\n", imageID.c_str(), command.c_str(), rv );
 		return FALSE;
 	}
 	dprintf( D_FULLDEBUG, "DockerAPI::run() returned pid %d\n", JobPid );
+	// The following line is for condor_who to parse
+	dprintf( D_ALWAYS, "Create_Process succeeded, pid=%d\n", JobPid);
 
 
-	// TODO: Start a timer to poll for job usage updates.
+	// Start a timer to poll for job usage updates.
+	updateTid = daemonCore->Register_Timer(2, 
+			20, (TimerHandlercpp)&DockerProc::getStats, 
+				"DockerProc::getStats",this);
 
 	++num_pids; // Used by OsProc::PublishUpdateAd().
 	return TRUE;
@@ -154,6 +163,8 @@ int DockerProc::StartJob() {
 bool DockerProc::JobReaper( int pid, int status ) {
 	TemporaryPrivSentry sentry(PRIV_ROOT);
 	dprintf( D_ALWAYS, "DockerProc::JobReaper()\n" );
+
+	daemonCore->Cancel_Timer(updateTid);
 
 	//
 	// This should mean that the container has terminated.
@@ -458,11 +469,14 @@ bool DockerProc::ShutdownFast() {
 }
 
 
+int
+DockerProc::getStats(int /*tid*/) {
+	DockerAPI::stats( containerName, memUsage, netIn, netOut, userCpu, sysCpu);
+	return true;
+}
+
 bool DockerProc::PublishUpdateAd( ClassAd * ad ) {
 	dprintf( D_ALWAYS, "DockerProc::PublishUpdateAd()\n" );
-
-	// TODO: get usage from procd somehow.  Set num_pids, if we can.  See
-	// VanillaProc::PublishUpdateAd() for the attributes to set.
 
 	//
 	// If we want to use the existing reporting code (probably a good
@@ -480,9 +494,6 @@ bool DockerProc::PublishUpdateAd( ClassAd * ad ) {
 	// or set them during our status polling.
 	//
 
-	uint64_t memUsage, netIn, netOut;
-	DockerAPI::stats( containerName, memUsage, netIn, netOut);
-
 	if (memUsage > 0) {
 		// Set RSS, Memory and ImageSize to same values, best we have
 		ad->Assign(ATTR_RESIDENT_SET_SIZE, int(memUsage / 1024));
@@ -490,6 +501,7 @@ bool DockerProc::PublishUpdateAd( ClassAd * ad ) {
 		ad->Assign(ATTR_IMAGE_SIZE, int(memUsage / (1024 * 1024)));
 		ad->Assign(ATTR_NETWORK_IN, double(netIn) / (1024 * 1024));
 		ad->Assign(ATTR_NETWORK_OUT, double(netOut) / (1024 * 1024));
+		ad->Assign(ATTR_JOB_REMOTE_USER_CPU, (int) (userCpu / (1024l * 1024l * 1024l)));
 	}
 	return OsProc::PublishUpdateAd( ad );
 }

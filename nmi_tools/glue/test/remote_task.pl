@@ -70,6 +70,7 @@ push @INC, "$ENV{BASE_DIR}/condor_tests";
 require CondorTest;
 require CondorPersonal;
 require CondorUtils;
+require CheckOutputFormats;
 
 if( ! defined $ENV{_NMI_TASKNAME} ) {
     die "_NMI_TASKNAME not in environment, can't test anything!\n";
@@ -343,8 +344,7 @@ sub StartTestPersonal {
 	my $test = shift;
 
 	my $firstappend_condor_config = '
-    	DAEMON_LIST = MASTER,SCHEDD,COLLECTOR,NEGOTIATOR,STARTD
-    	ALL_DEBUG = D_ALWAYS
+		DAEMON_LIST = MASTER, SCHEDD, COLLECTOR, NEGOTIATOR, STARTD
 		NEGOTIATOR_INTERVAL = 5
 		JOB_MAX_VACATE_TIME = 15
 	';

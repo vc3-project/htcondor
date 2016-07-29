@@ -18,10 +18,10 @@
 
 # OS pre mods
 if(${OS_NAME} STREQUAL "DARWIN")
-  exec_program (sw_vers ARGS -productVersion OUTPUT_VARIABLE TEST_VER)
-  if(${TEST_VER} MATCHES "10.([6789]|10)" AND ${SYS_ARCH} MATCHES "I386")
+	# All recent versions of Mac OS X are 64-bit, but 'uname -p'
+	# (the source for SYS_ARCH) reports 'i386'.
+	# Override that to set the actual architecture.
 	set (SYS_ARCH "X86_64")
-  endif()
 elseif(${OS_NAME} MATCHES "WIN")
 	cmake_minimum_required(VERSION 2.8.3)
 	set(WINDOWS ON)
@@ -528,6 +528,12 @@ elseif(${OS_NAME} STREQUAL "LINUX")
 	  find_library(HAVE_XEXT Xext)
 	endif()
 
+    check_include_files("systemd/sd-daemon.h" HAVE_SD_DAEMON_H)
+    if (HAVE_SD_DAEMON_H)
+        find_library(LIBSYSTEMD_DAEMON_PATH systemd-daemon)
+        find_so_name(LIBSYSTEMD_DAEMON_SO ${LIBSYSTEMD_DAEMON_PATH})
+    endif()
+
 	dprint("Threaded functionality only enabled in Linux, Windows, and Mac OS X > 10.6")
 	set(HAS_PTHREADS ${CMAKE_USE_PTHREADS_INIT})
 	set(HAVE_PTHREADS ${CMAKE_USE_PTHREADS_INIT})
@@ -566,6 +572,14 @@ elseif(${OS_NAME} STREQUAL "DARWIN")
 	else()
 		set(HAS_PTHREADS FALSE)
 		set(HAVE_PTHREADS FALSE)
+	endif()
+
+	exec_program (sw_vers ARGS -productVersion OUTPUT_VARIABLE TEST_VER)
+	if(${TEST_VER} MATCHES "10.([67])")
+		set (HAVE_OLD_SCANDIR 1)
+		dprint("Using old function signature for scandir()")
+	else()
+		dprint("Using POSIX function signature for scandir()")
 	endif()
 endif()
 
@@ -752,15 +766,16 @@ endif()
 ###########################################
 #if (NOT MSVC11) 
 #endif()
-add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/gsoap/2.7.10-p5)
 
 if (WINDOWS)
 
+  add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/gsoap/2.7.10-p5)
+
   if (MSVC11)
     if (CMAKE_SIZEOF_VOID_P EQUAL 8 )
-      set(BOOST_DOWNLOAD_WIN boost-1.54.0-VC11-Win32_V3.tar.gz)
+      set(BOOST_DOWNLOAD_WIN boost-1.54.0-VC11-Win32_V4.tar.gz)
     else()
-      set(BOOST_DOWNLOAD_WIN boost-1.54.0-VC11-Win32_V3.tar.gz)
+      set(BOOST_DOWNLOAD_WIN boost-1.54.0-VC11-Win32_V4.tar.gz)
     endif()
     add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/boost/1.54.0)
     add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/openssl/1.0.1j)
@@ -788,12 +803,12 @@ else ()
   add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/openssl/1.0.1e)
   add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/pcre/7.6)
   add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/krb5/1.12)
+  add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/gsoap/2.7.10-p5)
   add_subdirectory(${CONDOR_SOURCE_DIR}/src/classad)
 	add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/coredumper/2011.05.24-r31)
 	add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/unicoregahp/1.2.0)
 	add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/libxml2/2.7.3)
 	add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/libvirt/0.6.2)
-	add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/libdeltacloud/0.9)
 	add_subdirectory(${CONDOR_EXTERNAL_DIR}/bundles/libcgroup/0.37)
 
 	# globus is an odd *beast* which requires a bit more config.
@@ -848,6 +863,10 @@ else ()
 endif(WINDOWS)
 
 add_subdirectory(${CONDOR_SOURCE_DIR}/src/safefile)
+
+if (DARWIN)
+	include_directories( ${DARWIN_OPENSSL_INCLUDE} )
+endif()
 
 ### addition of a single externals target which allows you to
 if (CONDOR_EXTERNALS)

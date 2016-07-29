@@ -126,8 +126,10 @@ public:
 	void rewind() { ixNext = 0; }
 	const char * next() { const std::string * s = next_string(); return s ? s->c_str() : NULL; }
 	const char * first() { ixNext = 0; return next(); }
+	const char * remain() { if (!str || !str[ixNext]) return NULL; return str + ixNext; }
 	bool next(MyString & tok);
 
+	int next_token(int & length); // return start and length of next token or -1 if no tokens remain
 	const std::string * next_string(); // return NULL or a pointer to current token
 
 protected:
@@ -136,6 +138,5 @@ protected:
 	int ixNext;
 	std::string current;
 };
-
 
 #endif // _stl_string_utils_h_

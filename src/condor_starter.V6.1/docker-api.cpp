@@ -7,9 +7,14 @@
 #include "condor_classad.h"
 #include "condor_daemon_core.h"
 #include "file_lock.h"
+#include "condor_rw.h"
 
 #include "docker-api.h"
 #include <algorithm>
+
+#if !defined(WIN32)
+#include <sys/un.h>
+#endif
 
 static bool add_env_to_args_for_docker(ArgList &runArgs, const Env &env);
 static bool add_docker_arg(ArgList &runArgs);
@@ -17,6 +22,7 @@ static int run_simple_docker_command(	const std::string &command,
 					const std::string &container,
 					CondorError &e, bool ignore_output=false);
 static int gc_image(const std::string &image);
+static std::string makeHostname(ClassAd *machineAd, ClassAd *jobAd);
 
 //
 // Because we fork before calling docker, we don't actually
@@ -24,7 +30,8 @@ static int gc_image(const std::string &image);
 // remote image pull violates the principle of least astonishment).
 //
 int DockerAPI::run(
-	const ClassAd &machineAd,
+	ClassAd &machineAd,
+	ClassAd &jobAd,
 	const std::string & containerName,
 	const std::string & imageID,
 	const std::string & command,
@@ -81,6 +88,22 @@ int DockerAPI::run(
 		runArgs.AppendArg(mem);
 	} 
 
+	// drop unneeded Linux capabilities
+	if (param_boolean("DOCKER_DROP_ALL_CAPABILITIES", true /*default*/,
+		true /*do_log*/, &machineAd, &jobAd)) {
+		runArgs.AppendArg("--cap-drop=all");
+			
+		// --no-new-privileges flag appears in docker 1.11
+		if (DockerAPI::majorVersion > 1 ||
+		    DockerAPI::minorVersion > 10) {
+			runArgs.AppendArg("--no-new-privileges");
+		}
+	}
+
+	// Give the container a useful name
+	std::string hname = makeHostname(&machineAd, &jobAd);
+	runArgs.AppendArg("--hostname");
+	runArgs.AppendArg(hname.c_str());
 
 		// Now the container name
 	runArgs.AppendArg( "--name" );
@@ -109,19 +132,24 @@ int DockerAPI::run(
 	// Run with the uid that condor selects for the user
 	// either a slot user or submitting user or nobody
 	uid_t uid = 0;
+	uid_t gid = 0;
 
 	// Docker doesn't actually run on Windows, but we compile
 	// on Windows because...
 #ifndef WIN32
 	uid = get_user_uid();
+	gid = get_user_gid();
 #endif
 	
-	if (uid == 0) {
+	if ((uid == 0) || (gid == 0)) {
 		dprintf(D_ALWAYS|D_FAILURE, "Failed to get userid to run docker job\n");
 		return -9;
 	}
+
 	runArgs.AppendArg("--user");
-	runArgs.AppendArg(uid);
+	std::string uidgidarg;
+	formatstr(uidgidarg, "%d:%d", uid, gid);
+	runArgs.AppendArg(uidgidarg);
 
 	// Run the command with its arguments in the image.
 	runArgs.AppendArg( imageID );
@@ -272,6 +300,7 @@ DockerAPI::unpause( const std::string & container, CondorError & err ) {
 	return run_simple_docker_command("unpause", container, err);
 }
 
+#if 0
 static uint64_t
 convertUnits(uint64_t raw, char *unit) {
 	switch (*unit) {
@@ -294,9 +323,111 @@ convertUnits(uint64_t raw, char *unit) {
 		break;
 	}
 }
+#endif
 
+
+	/* Find usage stats on a running container by talking
+ 	 * directly to the server
+ 	 */
+ 	 
+int
+DockerAPI::stats(const std::string &container, uint64_t &memUsage, uint64_t &netIn, uint64_t &netOut, uint64_t &userCpu, uint64_t &sysCpu) {
+
+#if defined(WIN32)
+	return -1;
+#else
+
+	/*
+ 	 * Create a Unix domain socket 
+ 	 *
+ 	 * This is what the docker server listens on
+ 	 */
+
+	int uds = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (uds < 0) {
+		dprintf(D_ALWAYS, "Can't create unix domain socket, no docker statistics will be available\n");
+		return -1;
+	}
+
+	struct sockaddr_un sa;
+	memset(&sa, 0, sizeof(sa));
+	
+	sa.sun_family = AF_UNIX;
+	strncpy(sa.sun_path, "/var/run/docker.sock",sizeof(sa.sun_path) - 1);
+
+	{
+	TemporaryPrivSentry sentry(PRIV_ROOT);
+	int cr = connect(uds, (struct sockaddr *) &sa, sizeof(sa));
+	if (cr != 0) {
+		dprintf(D_ALWAYS, "Can't connect to /var/run/docker.sock %s, no statistics will be available\n", strerror(errno));
+		close(uds);
+		return -1;
+	}
+	}
+
+	char request[256];
+
+	sprintf(request, "GET /containers/%s/stats?stream=0 HTTP/0.9\r\n\r\n", container.c_str());
+	int ret = write(uds, request, strlen(request));
+	if (ret < 0) {
+		dprintf(D_ALWAYS, "Can't send request to docker server, no statistics will be available\n");
+		close(uds);
+		return -1;
+	}
+
+	std::string response;
+
+	char buf[1024];
+	int written;
+
+	// read with 200 second timeout, no flags, nonblocking
+	while ((written = condor_read("Docker Socket", uds, buf, 1, 5, 0, false)) > 0) {
+		response.append(buf, written);
+	} 
+
+	dprintf(D_FULLDEBUG, "docker stats: %s\n", response.c_str());
+	close(uds);
+
+	// Response now contains an enormous JSON formatted response
+	// Hackily extract the fields we are interested in
+	
+	size_t pos;
+	memUsage = netIn = netOut = userCpu = sysCpu = 0;
+
+		// Would really like a real JSON parser here...
+	pos = response.find("\"max_usage\"");
+	if (pos != std::string::npos) {
+		sscanf(response.c_str()+pos, "\"max_usage\":%ld", &memUsage);	
+	}
+	pos = response.find("\"tx_bytes\"");
+	if (pos != std::string::npos) {
+		sscanf(response.c_str()+pos, "\"tx_bytes\":%ld", &netOut);	
+	}
+	pos = response.find("\"rx_bytes\"");
+	if (pos != std::string::npos) {
+		sscanf(response.c_str()+pos, "\"rx_bytes\":%ld", &netIn);	
+	}
+	pos = response.find("\"usage_in_usermode\"");
+	if (pos != std::string::npos) {
+		sscanf(response.c_str()+pos, "\"usage_in_usermode\":%ld", &userCpu);	
+	}
+	pos = response.find("\"usage_in_kernelmode\"");
+	if (pos != std::string::npos) {
+		sscanf(response.c_str()+pos, "\"usage_in_kernelmode\":%ld", &sysCpu);	
+	}
+	dprintf(D_FULLDEBUG, "docker stats reports max_usage is %ld rx_bytes is %ld tx_bytes is %ld usage_in_usermode is %ld usage_in-sysmode is %ld\n", memUsage, netIn, netOut, userCpu, sysCpu);
+
+	return 0;
+#endif
+
+} /*
+ *  getting stats by running docker stats is now deprecated
+ */
+
+#if 0
 int
 DockerAPI::stats(const std::string &container, uint64_t &memUsage, uint64_t &netIn, uint64_t &netOut) {
+newstats(container, memUsage, netIn, netOut);
 	ArgList args;
 	if ( ! add_docker_arg(args))
 		return -1;
@@ -354,6 +485,8 @@ DockerAPI::stats(const std::string &container, uint64_t &memUsage, uint64_t &net
 	dprintf(D_FULLDEBUG, "memUsage is %g (%s), net In is %g (%s), net Out is %g (%s)\n", memRaw, memUsageUnit, netInRaw, netInUnit, netOutRaw, netOutUnit);
 	return 0;
 }
+#endif
+
 int DockerAPI::detect( CondorError & err ) {
 	// FIXME: Remove ::version() as a public API and return it from here,
 	// because there's no point in doing this twice.
@@ -451,8 +584,11 @@ int DockerAPI::version( std::string & version, CondorError & /* err */ ) {
 	if( buffer[end] == '\n' ) { buffer[end] = '\0'; }
 	version = buffer;
 
+	sscanf(version.c_str(), "Docker version %d.%d", &DockerAPI::majorVersion, &DockerAPI::minorVersion);
 	return 0;
 }
+int DockerAPI::majorVersion = -1;
+int DockerAPI::minorVersion = -1;
 
 int DockerAPI::inspect( const std::string & containerID, ClassAd * dockerAd, CondorError & /* err */ ) {
 	if( dockerAd == NULL ) {
@@ -719,4 +855,27 @@ gc_image(const std::string & image) {
   lock.release();
 
   return 0;
+}
+
+std::string 
+makeHostname(ClassAd *machineAd, ClassAd *jobAd) {
+	std::string hostname;
+
+	std::string owner("unknown");
+	jobAd->LookupString(ATTR_OWNER, owner);
+	
+	hostname += owner;
+
+	int cluster = 1;
+	int proc = 1;
+	jobAd->LookupInteger(ATTR_CLUSTER_ID, cluster);
+	jobAd->LookupInteger(ATTR_PROC_ID, proc);
+	formatstr_cat(hostname, "-%d.%d-", cluster, proc);
+
+	std::string machine("host");
+	machineAd->LookupString(ATTR_MACHINE, machine);
+
+	hostname += machine;
+
+	return hostname;
 }

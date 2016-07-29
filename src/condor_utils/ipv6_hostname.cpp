@@ -108,7 +108,9 @@ bool init_local_hostname_impl()
 		local_fqdn_initialized = true;
 		if (!local_ipaddr_initialized) {
 			local_ipaddr = convert_hostname_to_ipaddr(local_hostname);
-			local_ipaddr_initialized = true;
+			if (local_ipaddr != condor_sockaddr::null) {
+				local_ipaddr_initialized = true;
+			}
 		}
 	}
 
@@ -123,8 +125,13 @@ bool init_local_hostname_impl()
 			hint.ai_family = AF_UNSPEC;
 			int ret = ipv6_getaddrinfo(test_hostname.Value(), NULL, ai, hint);
 			if(ret == 0) { gai_success = true; break; }
+			if(ret != EAI_AGAIN ) {
+				dprintf(D_ALWAYS, "init_local_hostname_impl: ipv6_getaddrinfo() could not look up '%s': %s (%d).  Error is not recoverable; giving up.  Problems are likely.\n", test_hostname.Value(), gai_strerror(ret), ret );
+				gai_success = false;
+				break;
+			}
 
-			dprintf(D_ALWAYS, "init_local_hostname_impl: ipv6_getaddrinfo() could not look up %s: %s (%d). Try %d of %d. Sleeping for %d seconds\n", test_hostname.Value(), gai_strerror(ret), ret, try_count+1, MAX_TRIES, SLEEP_DUR);
+			dprintf(D_ALWAYS, "init_local_hostname_impl: ipv6_getaddrinfo() returned EAI_AGAIN for '%s'.  Will try again after sleeping %d seconds (try %d of %d).\n", test_hostname.Value(), SLEEP_DUR, try_count + 1, MAX_TRIES );
 			if(try_count == MAX_TRIES) {
 				dprintf(D_ALWAYS, "init_local_hostname_impl: ipv6_getaddrinfo() never succeeded. Giving up. Problems are likely\n");
 				break;
@@ -303,8 +310,16 @@ int get_fqdn_and_ip_from_hostname(const MyString& hostname,
 	if (nodns_enabled()) {
 		// if nodns is enabled, convert hostname to ip address directly
 		ret_addr = convert_hostname_to_ipaddr(hostname);
-		found_ip = true;
-	} else {
+
+		// note that convert_hostname_to_ipaddr() could fail; if so,
+		// leave found_ip = false and fall through to the block below
+		// where we try to use the resolver.
+		if (ret_addr != condor_sockaddr::null) {
+			found_ip = true;
+		}
+	}
+
+	if (!found_ip) {
 		// we look through getaddrinfo and gethostbyname
 		// to further seek fully-qualified domain name and corresponding
 		// ip address
@@ -587,6 +602,7 @@ MyString convert_ipaddr_to_hostname(const condor_sockaddr& addr)
 	return ret;
 }
 
+// Upon failure, return condor_sockaddr::null
 condor_sockaddr convert_hostname_to_ipaddr(const MyString& fullname)
 {
 	MyString hostname;

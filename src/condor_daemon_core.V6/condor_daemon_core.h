@@ -183,6 +183,7 @@ const int DCJOBOPT_NO_ENV_INHERIT   = (1<<2);        // do not pass our env or C
 const int DCJOBOPT_NEVER_USE_SHARED_PORT   = (1<<3);
 const int DCJOBOPT_NO_UDP           = (1<<4);
 const int DCJOBOPT_NO_CONDOR_ENV_INHERIT = (1<<5);   // do not pass CONDOR_INHERIT to the child
+const int DCJOBOPT_USE_SYSTEMD_INET_SOCKET = (1<<6);	     // Pass the reli sock from systemd as the command socket.
 
 #define HAS_DCJOBOPT_SUSPEND_ON_EXEC(mask)  ((mask)&DCJOBOPT_SUSPEND_ON_EXEC)
 #define HAS_DCJOBOPT_NO_ENV_INHERIT(mask)  ((mask)&DCJOBOPT_NO_ENV_INHERIT)
@@ -190,6 +191,7 @@ const int DCJOBOPT_NO_CONDOR_ENV_INHERIT = (1<<5);   // do not pass CONDOR_INHER
 #define HAS_DCJOBOPT_NEVER_USE_SHARED_PORT(mask) ((mask)&DCJOBOPT_NEVER_USE_SHARED_PORT)
 #define HAS_DCJOBOPT_NO_UDP(mask) ((mask)&DCJOBOPT_NO_UDP)
 #define HAS_DCJOBOPT_CONDOR_ENV_INHERIT(mask)  (!((mask)&DCJOBOPT_NO_CONDOR_ENV_INHERIT))
+#define HAS_DCJOBOPT_USE_SYSTEMD_INET_SOCKET(mask) ((mask)&DCJOBOPT_USE_SYSTEMD_INET_SOCKET)
 
 // structure to be used as an argument to Create_Process for tracking process
 // families
@@ -1046,6 +1048,11 @@ class DaemonCore : public Service
     */
     bool GetTimerTimeslice ( int id, Timeslice &timeslice );
 
+    /** Get the timestamp of when the timer is expected to fire
+     *  @param id The timer's ID
+     *  @return timestamp; 0 if the timer does not exist.
+     */
+    time_t GetNextRuntime(int id) {return t.GetNextRuntime(id);}
 	//@}
 
     /** Not_Yet_Documented
@@ -1679,6 +1686,7 @@ class DaemonCore : public Service
 	SafeSock* super_dc_ssock;	// super user udp command socket
     int m_iMaxAcceptsPerCycle; ///< maximum number of inbound connections to accept per loop
 	int m_iMaxReapsPerCycle; // maximum number reapers to invoke per event loop
+	int m_MaxTimeSkip;
 
     void Inherit( void );  // called in main()
 	void InitDCCommandSocket( int command_port );  // called in main()
@@ -2186,6 +2194,26 @@ class DaemonCore : public Service
  * @see DaemonCore::Create_Process
  */
 bool InitCommandSockets(int tcp_port, int udp_port, DaemonCore::SockPairVec & socks, bool want_udp, bool fatal);
+
+// helper function to extract the parent address and inherited socket information from
+// the inherit string that is normally passed via the CONDOR_INHERIT environment variable
+// This function extracts parent & socket info then tokenizes the remaining items from
+// the string into the supplied StringList.
+//
+// @return
+//    number of entries in the socks[] array that were populated.
+//    negative values for failure.
+//
+// note: the size of the socks array should be 1 more than the maximum if you want to have room
+// for a terminating null.
+//
+int extractInheritedSocks (
+	const char * inherit,  // in: inherit string, usually from CONDOR_INHERIT environment variable
+	pid_t & ppid,          // out: pid of the parent
+	std::string & psinful, // out: sinful of the parent
+	Stream* socks[],   // out: filled in with items from the inherit string
+	int     cMaxSocks, // in: number of items in the socks array
+	StringList & remaining_items); // out: unparsed items from the inherit string are appended
 
 // helper class that uses C++ constructor/destructor to automatically
 // time a function call. 

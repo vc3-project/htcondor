@@ -216,6 +216,12 @@ public:
 	void enter_reverse_connecting_state();
 	void exit_reverse_connecting_state(ReliSock *sock);
 
+		// returns a pointer to an internally managed
+		// buffer with a human-readable string containing
+		// tcp statistics from the TCP_INFO sockopt.  Don't free.
+		// may return null
+	char *get_statistics();
+
 #ifndef WIN32
 	// interface no longer supported 
 	int attach_to_file_desc(int);
@@ -259,6 +265,11 @@ public:
 	int clear_read_block_flag() {bool state = m_read_would_block; m_read_would_block = false; return state;}
 
 	bool is_closed() {return rcv_msg.m_closed;}
+
+	// serialize and deserialize
+	const char * serialize(const char *);	// restore state from buffer
+	char * serialize() const;	// save state into buffer
+
 //	PROTECTED INTERFACE TO RELIABLE SOCKS
 //
 protected:
@@ -278,8 +289,6 @@ protected:
 	/*
 	**	Methods
 	*/
-	char * serialize(char *);	// restore state from buffer
-	char * serialize() const;	// save state into buffer
 
 	int prepare_for_nobuffering( stream_coding = stream_unknown);
 	int perform_authenticate( bool with_key, KeyInfo *& key, 
@@ -351,6 +360,8 @@ protected:
 
 	int is_client;
 	char *hostAddr;
+	char *statsBuf;
+
 	classy_counted_ptr<class CCBClient> m_ccb_client; // for reverse connects
 
 		// after connecting, request to be routed to this daemon

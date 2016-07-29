@@ -371,6 +371,10 @@ makeGridAdHashKey (AdNameHashKey &hk, ClassAd *ad)
         }
     }
 
+	if ( adLookup( "Grid", ad, ATTR_GRIDMANAGER_SELECTION_VALUE, NULL, tmp, false ) ) {
+		hk.name += tmp;
+	}
+
     return true;
 }
 

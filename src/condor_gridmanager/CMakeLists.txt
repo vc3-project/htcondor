@@ -22,9 +22,9 @@ if(NOT WIN_EXEC_NODE_ONLY)
 	if ( LINUX )
 		file( GLOB RmvSrcs *_gahp_wrapper* )
 	elseif( DARWIN OR WINDOWS )
-		file( GLOB RmvSrcs *_gahp_wrapper* *dcloud* )
+		file( GLOB RmvSrcs *_gahp_wrapper* )
 	else()
-		file( GLOB RmvSrcs *_gahp_wrapper* *dcloud* *ec2* *gce* )
+		file( GLOB RmvSrcs *_gahp_wrapper* *ec2* *gce* )
 	endif()
 	condor_glob( GMHDRS GMSRCS "${RmvSrcs}" )
 
@@ -72,6 +72,7 @@ if(NOT WIN_EXEC_NODE_ONLY)
                 slurm_resume.sh
                 slurm_status.sh
                 slurm_submit.sh
+                slurm_status.py
                 DESTINATION ${C_LIBEXEC}/glite/bin
                 PERMISSIONS ${CONDOR_SCRIPT_PERMS} )
         endif()

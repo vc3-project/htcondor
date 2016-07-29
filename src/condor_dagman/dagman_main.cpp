@@ -71,6 +71,7 @@ static void Usage() {
             "\t\t[-NoEventChecks]\n"
             "\t\t[-AllowLogError]\n"
             "\t\t[-DontAlwaysRunPost]\n"
+            "\t\t[-AlwaysRunPost]\n"
             "\t\t[-WaitForDebug]\n"
             "\t\t[-UseDagDir]\n"
             "\t\t[-AutoRescue <0|1>]\n"
@@ -137,11 +138,12 @@ Dagman::Dagman() :
 	_defaultNodeLog(""),
 	_generateSubdagSubmits(true),
 	_maxJobHolds(100),
-	_runPost(true),
-	_defaultPriority(0),
+	_runPost(false),
+	_priority(0), // from config or command line
 	_claim_hold_time(20),
 	_doRecovery(false),
 	_suppressJobLogs(false),
+	_batchName(""),
 	_dagmanClassad(NULL)
 {
     debug_level = DEBUG_VERBOSE;  // Default debug level is verbose output
@@ -236,10 +238,10 @@ Dagman::Config()
 	debug_printf( DEBUG_NORMAL, "DAGMAN_USER_LOG_SCAN_INTERVAL setting: %d\n",
 				m_user_log_scan_interval );
 
-	_defaultPriority = param_integer( "DAGMAN_DEFAULT_PRIORITY",
-				_defaultPriority, INT_MIN, INT_MAX, false );
+	_priority = param_integer( "DAGMAN_DEFAULT_PRIORITY",
+				_priority, INT_MIN, INT_MAX, false );
 	debug_printf( DEBUG_NORMAL, "DAGMAN_DEFAULT_PRIORITY setting: %d\n",
-				_defaultPriority );
+				_priority );
 
 	if ( !param_boolean( "DAGMAN_ALWAYS_USE_NODE_LOG", true ) ) {
        	debug_printf( DEBUG_QUIET,
@@ -343,7 +345,7 @@ Dagman::Config()
 	debug_printf( DEBUG_NORMAL, "DAGMAN_SUBMIT_DEPTH_FIRST setting: %s\n",
 				submitDepthFirst ? "True" : "False" );
 
-	_runPost = param_boolean( "DAGMAN_ALWAYS_RUN_POST", true );
+	_runPost = param_boolean( "DAGMAN_ALWAYS_RUN_POST", _runPost );
 	debug_printf( DEBUG_NORMAL, "DAGMAN_ALWAYS_RUN_POST setting: %s\n",
 			_runPost ? "True" : "False" );
 
@@ -668,6 +670,8 @@ void main_init (int argc, char ** const argv) {
     //
     // Process command-line arguments
     //
+	bool alwaysRunPostSet = false;
+
     for (i = 1; i < argc; i++) {
         if( !strcasecmp( "-Debug", argv[i] ) ) {
             i++;
@@ -728,6 +732,7 @@ void main_init (int argc, char ** const argv) {
                 Usage();
             }
             dagman.maxPostScripts = atoi( argv[i] );
+
         } else if( !strcasecmp( "-NoEventChecks", argv[i] ) ) {
 			debug_printf( DEBUG_QUIET, "Warning: -NoEventChecks is "
 						"ignored; please use the DAGMAN_ALLOW_EVENTS "
@@ -737,8 +742,22 @@ void main_init (int argc, char ** const argv) {
         } else if( !strcasecmp( "-AllowLogError", argv[i] ) ) {
 			dagman.allowLogError = true;
 
-        } else if( !strcasecmp( "-DontAlwaysRunPost",argv[i] ) ) {
+        } else if( !strcasecmp( "-DontAlwaysRunPost", argv[i] ) ) {
+			if ( alwaysRunPostSet && dagman._runPost ) {
+				debug_printf( DEBUG_QUIET,
+							"ERROR: -DontAlwaysRunPost and -AlwaysRunPost are both set!\n" );
+				DC_Exit( EXIT_ERROR );
+			}
+			alwaysRunPostSet = true;
 			dagman._runPost = false;
+
+        } else if( !strcasecmp( "-AlwaysRunPost", argv[i] ) ) {
+			if ( alwaysRunPostSet && !dagman._runPost ) {
+				debug_printf( DEBUG_QUIET,
+							"ERROR: -DontAlwaysRunPost and -AlwaysRunPost are both set!\n" );
+				DC_Exit( EXIT_ERROR );
+			}
+			dagman._runPost = true;
 
         } else if( !strcasecmp( "-WaitForDebug", argv[i] ) ) {
 			wait_for_debug = 1;
@@ -824,7 +843,7 @@ void main_init (int argc, char ** const argv) {
 				debug_printf( DEBUG_NORMAL, "No priority value specified\n");
 				Usage();
 			}
-			dagman._submitDagDeepOpts.priority = atoi(argv[i]);
+			dagman._priority = atoi(argv[i]);
 
 		} else if( !strcasecmp( "-dont_use_default_node_log", argv[i] ) ) {
        		debug_printf( DEBUG_QUIET,
@@ -844,6 +863,13 @@ void main_init (int argc, char ** const argv) {
 	dagman.dagFiles.rewind();
 	dagman.primaryDagFile = dagman.dagFiles.next();
 	dagman.multiDags = (dagman.dagFiles.number() > 1);
+
+	dagman._dagmanClassad->GetSetBatchName( dagman.primaryDagFile,
+				dagman._batchName );
+
+	dagman._dagmanClassad->GetAcctInfo(
+				dagman._submitDagDeepOpts.acctGroup,
+				dagman._submitDagDeepOpts.acctGroupUser );
 
 	dagman.ResolveDefaultLog();
 
@@ -1104,11 +1130,8 @@ void main_init (int argc, char ** const argv) {
 	dagman.dag->SetConfigFile( dagman._dagmanConfigFile );
 	dagman.dag->SetMaxJobHolds( dagman._maxJobHolds );
 	dagman.dag->SetPostRun(dagman._runPost);
-	if( dagman._submitDagDeepOpts.priority != 0 ) { // From command line
-		dagman.dag->SetDefaultPriority(dagman._submitDagDeepOpts.priority);
-	} else if( dagman._defaultPriority != 0 ) { // From config file
-		dagman.dag->SetDefaultPriority(dagman._defaultPriority);
-		dagman._submitDagDeepOpts.priority = dagman._defaultPriority;
+	if( dagman._priority != 0 ) {
+		dagman.dag->SetDagPriority(dagman._priority);
 	}
 
     //
@@ -1155,8 +1178,8 @@ void main_init (int argc, char ** const argv) {
 					 	dagFile );
     	}
 	}
-	if( dagman.dag->GetDefaultPriority() != 0 ) {
-		dagman.dag->SetDefaultPriorities(); // Applies to the nodes of the dag
+	if( dagman.dag->GetDagPriority() != 0 ) {
+		dagman.dag->SetNodePriorities(); // Applies to the nodes of the dag
 	}
 	dagman.dag->GetJobstateLog().WriteDagmanStarted( dagman.DAGManJobId );
 	if ( rescueDagNum > 0 ) {

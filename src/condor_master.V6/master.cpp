@@ -55,6 +55,9 @@ extern int load_master_mgmt(void);
 #endif
 #endif
 
+#include "systemd_manager.h"
+#include <sstream>
+
 #ifdef WIN32
 
 #include "firewall.WINDOWS.h"
@@ -95,6 +98,7 @@ int	admin_command_handler(Service *, int, Stream *);
 int	ready_command_handler(Service *, int, Stream *);
 int	handle_subsys_command(int, Stream *);
 int     handle_shutdown_program( int cmd, Stream* stream );
+int     set_shutdown_program( const char * name );
 void	time_skip_handler(void * /*data*/, int delta);
 void	restart_everyone();
 
@@ -146,6 +150,84 @@ char	default_dc_daemon_list[] =
 // create an object of class daemons.
 class Daemons daemons;
 
+class SystemdNotifier : public Service {
+
+public:
+	SystemdNotifier() : m_watchdog_timer(-1) {}
+
+	void
+	config()
+	{
+		const condor_utils::SystemdManager & sd = condor_utils::SystemdManager::GetInstance();
+		int watchdog_secs = sd.GetWatchdogUsecs() / 1e6 / 2;
+		if (watchdog_secs <= 0) { watchdog_secs = 1; }
+		if (watchdog_secs > 20) { watchdog_secs = 10; }
+		Timeslice ts;
+		ts.setDefaultInterval(watchdog_secs);
+		m_watchdog_timer = daemonCore->Register_Timer(ts, static_cast<TimerHandlercpp>(&SystemdNotifier::status_handler),
+				"systemd status updater", this);
+		if (m_watchdog_timer < 0)
+		{
+			dprintf(D_ALWAYS, "Failed to register systemd update timer.\n");
+		} else {
+			dprintf(D_FULLDEBUG, "Set systemd to be notified once every %d seconds.\n", watchdog_secs);
+		}
+	}
+
+	void status_handler()
+	{
+		char *name;
+		class daemon *daemon;
+
+		daemons.ordered_daemon_names.rewind();
+		std::stringstream ss;
+		ss << "Problems: ";
+		bool had_prior = false;
+		bool missing_daemons = false;
+		while( (name = daemons.ordered_daemon_names.next()) ) {
+			daemon = daemons.FindDaemon( name );
+			if (!daemon->pid)
+			{
+				if (had_prior) { ss << ", "; }
+				else { had_prior = true; }
+				missing_daemons = true;
+				time_t starttime = daemon->GetNextRestart();
+				if (starttime)
+				{
+					time_t secs_to_start = starttime-time(NULL);
+					if (secs_to_start > 0)
+					{ ss << name << "=RESTART in " << secs_to_start << "s"; }
+					else
+					{ ss << name << "=RESTARTNG"; }
+				}
+				else
+				{ ss << name << "=STOPPED"; }
+			}
+		}
+		std::string status = ss.str();
+
+		const char * format_string = "STATUS=%s\nWATCHDOG=1";
+		if (!missing_daemons)
+		{
+			format_string = "READY=1\nSTATUS=%s\nWATCHDOG=1";
+			status = "All daemons are responding";
+		}
+
+		const condor_utils::SystemdManager &sd = condor_utils::SystemdManager::GetInstance();
+		int result = sd.Notify(format_string, status.c_str());
+		if (result == 0)
+		{
+			dprintf(D_ALWAYS, "systemd watchdog notification support not available.\n");
+			daemonCore->Cancel_Timer(m_watchdog_timer);
+			m_watchdog_timer = -1;
+		}
+	}
+
+private:
+	int m_watchdog_timer;
+};
+SystemdNotifier g_systemd_notifier;
+
 // called at exit to deallocate stuff so that memory checking tools are
 // happy and don't think we leaked any of this...
 static void
@@ -169,6 +251,17 @@ cleanup_memory( void )
 int
 master_exit(int retval)
 {
+	// If a shutdown_program has not been setup via the admin
+	// command-line tool, see if the condor_config specifies
+	// a default shutdown program to use.
+	if ( !shutdown_program ) {
+		char *defshut = param("DEFAULT_MASTER_SHUTDOWN_SCRIPT");
+		if (defshut) {
+			set_shutdown_program(defshut);
+			free(defshut);
+		}
+	}
+
 	cleanup_memory();
 
 #ifdef WIN32
@@ -198,7 +291,10 @@ master_exit(int retval)
 		}
 	}
 
-	DC_Exit(retval, shutdown_program );
+	// Exit via specified shutdown_program UNLESS retval is 2, which
+	// means the master never started and we are exiting via usage() message.
+	DC_Exit(retval, retval == 2 ? NULL : shutdown_program );
+
 	return 1;	// just to satisfy vc++
 }
 
@@ -206,7 +302,8 @@ void
 usage( const char* name )
 {
 	dprintf( D_ALWAYS, "Usage: %s [-f] [-t] [-n name]\n", name );
-	master_exit( 1 );
+	// Note: master_exit with value of 2 means do NOT run any shutdown_program
+	master_exit( 2 );
 }
 
 int
@@ -426,11 +523,20 @@ main_init( int argc, char* argv[] )
 		if (syscall(__NR_keyctl, KEYCTL_JOIN_SESSION_KEYRING, "htcondor")==-1 &&
 			errno != ENOSYS)
 		{
+			int saved_errno = errno;
+#if defined(EDQUOT)
+			if (saved_errno == EDQUOT) {
+				dprintf(D_ALWAYS | D_FAILURE,
+				   "Error during DISCARD_SESSION_KEYRING_ON_STARTUP, suggest "
+				   "increasing /proc/sys/kernel/keys/root_maxkeys\n");
+			}
+#endif /* defined EDQUOT */
+
 			EXCEPT("Failed DISCARD_SESSION_KEYRING_ON_STARTUP=True errno=%d",
-					errno);
+					saved_errno);
 		}
 	}
-#endif
+#endif /* defined LINUX */
 
     if (runfor != 0) {
         // We will construct an environment variable that 
@@ -472,6 +578,8 @@ main_init( int argc, char* argv[] )
 #endif
 	MasterPluginManager::Initialize();
 #endif
+
+	g_systemd_notifier.config();
 
 		// Register admin commands
 	daemonCore->Register_Command( RESTART, "RESTART",
@@ -805,13 +913,13 @@ handle_shutdown_program( int cmd, Stream* stream )
 		EXCEPT( "Unknown command (%d) in handle_shutdown_program", cmd );
 	}
 
-	char	*name = NULL;
+	MyString name;
 	stream->decode();
 	if( ! stream->code(name) ) {
-		dprintf( D_ALWAYS, "Can't read program name\n" );
-		if ( name ) {
-			free( name );
-		}
+		dprintf( D_ALWAYS, "Can't read program name in handle_shutdown_program\n" );
+	}
+
+	if ( name.IsEmpty() ) {
 		return FALSE;
 	}
 
@@ -821,10 +929,20 @@ handle_shutdown_program( int cmd, Stream* stream )
 	pname += name;
 	char	*path = param( pname.Value() );
 	if ( NULL == path ) {
-		dprintf( D_ALWAYS, "No shutdown program defined for '%s'\n", name );
+		dprintf( D_ALWAYS, "No shutdown program defined for '%s'\n", name.c_str() );
 		return FALSE;
 	}
 
+	int ret_val = set_shutdown_program( path );
+
+	if (path) free(path);
+
+	return ret_val;
+}
+
+int
+set_shutdown_program(const char *path)
+{
 	// Try to access() it
 # if defined(HAVE_ACCESS)
 	priv_state	priv = set_root_priv();
@@ -841,7 +959,7 @@ handle_shutdown_program( int cmd, Stream* stream )
 	if ( shutdown_program ) {
 		free( shutdown_program );
 	}
-	shutdown_program = path;
+	shutdown_program = strdup(path);
 	dprintf( D_ALWAYS,
 			 "Shutdown program path set to %s\n", shutdown_program );
 	return TRUE;
@@ -1090,6 +1208,7 @@ init_daemon_list()
 				daemon_names.insert( "SHARED_PORT" );
 			}
 		}
+
 		daemons.ordered_daemon_names.create_union( daemon_names, false );
 
 		daemon_names.rewind();

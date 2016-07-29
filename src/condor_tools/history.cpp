@@ -23,6 +23,7 @@
 #include "condor_debug.h"
 #include "condor_attributes.h"
 #include "condor_distribution.h"
+#include "condor_environ.h"
 #include "dc_collector.h"
 #include "dc_schedd.h"
 #include "get_daemon_name.h"
@@ -39,6 +40,8 @@
 #include "historyFileFinder.h"
 #include "condor_id.h"
 #include "userlog_to_classads.h"
+#include "setenv.h"
+#include "condor_daemon_core.h" // for extractInheritedSocks
 
 #include "history_utils.h"
 #include "backward_file_reader.h"
@@ -58,40 +61,51 @@ void Usage(char* name, int iExitCode)
 	printf ("Usage: %s [source] [restriction-list] [options]\n"
 		"\n   where [source] is one of\n"
 		"\t-file <file>\t\tRead history data from specified file\n"
+		"\t-local\t\tRead history data from the configured files\n"
 		"\t-userlog <file>\t\tRead job data specified userlog file\n"
 		"\t-name <schedd-name>\tRemote schedd to read from\n"
 		"\t-pool <collector-name>\tPool remote schedd lives in.\n"
-		"   If neither -pool, -name, -userlog or -file is specified, then the local history file is used.\n"
+		"   If neither -file, -local, -userlog, or -name, is specified, then\n"
+		"   the SCHEDD configured by SCHEDD_HOST is queried.  If there\n"
+		"   is no configured SCHEDD (the default) the local history file(s) are read.\n"
 #ifdef HAVE_EXT_POSTGRESQL
 		"\t-dbname <schedd-name>\tRead history data from Quill database\n"
-		"\t-completedsince <time>\tDisplay jobs completed on/after time\n"
 #endif
 		"\n   and [restriction-list] is one or more of\n"
 		"\t<cluster>\t\tGet information about specific cluster\n"
 		"\t<cluster>.<proc>\tGet information about specific job\n"
 		"\t<owner>\t\t\tInformation about jobs owned by <owner>\n"
 		"\t-constraint <expr>\tInformation about jobs matching <expr>\n"
+		"\t-scanlimit <num>\tStop scanning when <num> jobs have been read\n"
+		"\t-since <jobid>|<expr>\tStop scanning when <expr> is true or <jobid> is read\n"
+		"\t-completedsince <time>\tDisplay jobs completed on/after time\n"
 		"\n   and [options] are one or more of\n"
 		"\t-help\t\t\tDisplay this screen\n"
 		"\t-backwards\t\tList jobs in reverse chronological order\n"
 		"\t-forwards\t\tList jobs in chronological order\n"
+	//	"\t-inherit\t\tWrite results to a socket inherited from parent\n" // for use only by schedd when invoking HISTORY_HELPER
+	//  "\t-stream-results\tWrite an EOM into the socket after each result\n" // for use only by schedd when invoking HISTORY_HELPER
 		"\t-limit <number>\t\tLimit the number of jobs displayed\n"
 		"\t-match <number>\t\tOld name for -limit\n"
 		"\t-long\t\t\tDisplay entire classads\n"
+		"\t-attributes <attr-list>\tDisplay only the given attributes\n"
 		"\t-wide[:<width>]\tcon\tDon't truncate fields to fit into 80 columns\n"
 		"\t-format <fmt> <attr>\tDisplay attr using printf formatting\n"
-		"\t-autoformat[:lhVr,tng] <attr> [<attr2 ...]   Display attr(s) with automatic formatting\n"
-		"\t-af[:lhVr,tng] <attr> [<attr2 ...]\t    Same as -autoformat above\n"
-		"\t    where the [lhVr,tng] options influence the automatic formatting:\n"
-		"\t    l\tattribute labels\n"
-		"\t    h\tattribute column headings\n"
-		"\t    V\t%%V formatting (string values are quoted)\n"
-		"\t    r\t%%r formatting (raw/unparsed values)\n"
-		"\t    t\ttab before each value (default is space)\n"
-		"\t    g\tnewline between ClassAds, no space before values\n"
-		"\t    ,\tcomma after each value\n"
-		"\t    n\tnewline after each value\n"
+		"\t-autoformat[:jlhVr,tng] <attr> [<attr2> [...]]\n"
+		"\t-af[:jlhVr,tng] <attr> [attr2 [...]]\n"
+		"\t    Print attr(s) with automatic formatting\n"
+		"\t    the [jlhVr,tng] options modify the formatting\n"
+		"\t        j   display Job Id\n"
+		"\t        l   attribute labels\n"
+		"\t        h   attribute column headings\n"
+		"\t        V   %%V formatting (string values are quoted)\n"
+		"\t        r   %%r formatting (raw/unparsed values)\n"
+		"\t        ,   comma after each value\n"
+		"\t        t   tab before each value (default is space)\n"
+		"\t        n   newline after each value\n"
+		"\t        g   newline between ClassAds, no space before values\n"
 		"\t    use -af:h to get tabular values with headings\n"
+		"\t    use -af:lrng to get -long equivalent format\n"
 		"\t-print-format <file>\tUse <file> to specify the attributes and formatting\n"
 		"\t\t\t\t(experimental, see htcondor-wiki for more information)\n"
 		, name);
@@ -111,7 +125,7 @@ static void readHistoryFromFileEx(const char *JobHistoryFileName, const char* co
 static void printJobAds(ClassAdList & jobs);
 static void printJob(ClassAd & ad);
 
-static int set_print_mask_from_stream(AttrListPrintMask & print_mask, std::string & constraint, const char * streamid, bool is_filename);
+static int set_print_mask_from_stream(AttrListPrintMask & print_mask, std::string & constraint, StringList & attrs, const char * streamid, bool is_filename);
 static int getDisplayWidth();
 
 
@@ -125,6 +139,7 @@ static	ClassAdList	quillList;
 static  bool longformat=false;
 static  bool diagnostic = false;
 static  bool use_xml=false;
+static  bool use_json = false;
 static  bool wide_format=false;
 static  int  wide_format_width = 0;
 static  bool customFormat=false;
@@ -134,8 +149,38 @@ static  AttrListPrintMask mask;
 //tj: headings moved into the mask object.
 //static  List<const char> headings; // The list of headings for the mask entries
 static int cluster=-1, proc=-1;
-static int specifiedMatch = 0, matchCount = 0;
+static int matchCount = 0, adCount = 0;
+static int printCount = 0;
+static int specifiedMatch = -1, maxAds = -1;
 static std::string g_name, g_pool;
+static Stream* socks[2] = { NULL, NULL };
+static bool writetosocket = false;
+static bool streamresults = false;
+static bool streamresults_specified = false; // set to true if -stream-results:<bool> argument is supplied
+static int writetosocket_failcount = 0;
+static bool abort_transfer = false;
+static StringList projection;
+static classad::References whitelist;
+static ExprTree *sinceExpr = NULL;
+
+int getInheritedSocks(Stream* socks[], size_t cMaxSocks, pid_t & ppid)
+{
+	const char *envName = EnvGetName(ENV_INHERIT);
+	const char *inherit = GetEnv(envName);
+
+	dprintf(D_FULLDEBUG, "condor_history: getInheritedSocks from %s is '%s'\n", envName, inherit ? inherit : "NULL");
+
+	if ( ! inherit || ! inherit[0]) {
+		socks[0] = NULL;
+		return 0;
+	}
+
+	std::string psinful;
+	StringList remaining_items; // for the remainder which we expect to be empty.
+	int cSocks = extractInheritedSocks(inherit, ppid, psinful, socks, cMaxSocks, remaining_items);
+	UnsetEnv(envName); // prevent this from being passed on to children.
+	return cSocks;
+}
 
 int
 main(int argc, char* argv[])
@@ -153,14 +198,15 @@ main(int argc, char* argv[])
   int flag = 1;
   void **parameters;
   char *dbconn=NULL;
-  char *completedsince = NULL;
   char *dbIpAddr=NULL, *dbName=NULL,*queryPassword=NULL;
   bool remoteread = false;
+  const char *completedsince = NULL;
 #endif /* HAVE_EXT_POSTGRESQL */
 
   const char *owner=NULL;
   bool readfromfile = true;
   bool fileisuserlog = false;
+  bool dash_local = false; // set if -local is passed
 
   char* JobHistoryFileName=NULL;
   const char * pcolon=NULL;
@@ -175,6 +221,8 @@ main(int argc, char* argv[])
   myDistro->Init( argc, argv );
 
   config();
+
+  readfromfile = ! param_defined("SCHEDD_HOST");
 
 #ifdef HAVE_EXT_POSTGRESQL
   parameters = (void **) malloc(NUM_PARAMETERS * sizeof(void *));
@@ -192,6 +240,11 @@ main(int argc, char* argv[])
 		longformat = true;
 	}
     
+    else if (is_dash_arg_prefix(argv[i],"json",4)) {
+		use_json = true;
+		longformat = true;
+	}
+
     else if (is_dash_arg_prefix(argv[i],"backwards",1)) {
         backwards=TRUE;
     }
@@ -199,7 +252,9 @@ main(int argc, char* argv[])
 	// must be at least -forw to avoid conflict with -f (for file) and -format
     else if (is_dash_arg_prefix(argv[i],"nobackwards",3) ||
 			 is_dash_arg_prefix(argv[i],"forwards",4)) {
-        backwards=FALSE;
+		if ( ! writetosocket) {
+			backwards=FALSE;
+		}
     }
 
     else if (is_dash_arg_colon_prefix(argv[i],"wide", &pcolon, 1)) {
@@ -215,11 +270,20 @@ main(int argc, char* argv[])
         i++;
         if (argc <= i) {
             fprintf(stderr,
-                    "Error: Argument -match requires a number value "
-                    " as a parameter.\n");
+                    "Error: Argument -match requires a number value as a parameter.\n");
             exit(1);
         }
         specifiedMatch = atoi(argv[i]);
+    }
+
+    else if (is_dash_arg_prefix(argv[i],"scanlimit",4)) {
+        i++;
+        if (argc <= i) {
+            fprintf(stderr,
+                    "Error: Argument %s requires a number value  as a parameter.\n", argv[i]);
+            exit(1);
+        }
+        maxAds = atoi(argv[i]);
     }
 
 #ifdef HAVE_EXT_POSTGRESQL
@@ -273,6 +337,59 @@ main(int argc, char* argv[])
 		readfromfile = true;
 		fileisuserlog = true;
 	}
+	else if (is_dash_arg_prefix(argv[i],"local",2)) {
+		// -local overrides the existance of SCHEDD_HOST and forces a local query
+		if ( ! g_name.empty()) {
+			fprintf(stderr, "Error: Arguments -local and -name cannot be used together\n");
+			exit(1);
+		}
+		readfromfile = true;
+		dash_local = true;
+	}
+	else if (is_dash_arg_colon_prefix(argv[i],"stream-results", &pcolon, 6)) {
+		streamresults = true;
+		streamresults_specified = true;
+		if (pcolon) {
+			// permit optional -stream:false argument to force streaming off, but default to on unless it parses as a bool.
+			++pcolon;
+			if ( ! string_is_boolean_param(pcolon, streamresults)) {
+				streamresults = true;
+			}
+		}
+	}
+	else if (is_dash_arg_prefix(argv[i],"inherit",-1)) {
+
+		// Start writing to the ToolLog
+		dprintf_config("Tool");
+
+		if (IsFulldebug(D_ALWAYS)) {
+			MyString myargs;
+			for (int ii = 0; ii < argc; ++ii) { formatstr_cat(myargs, "[%d]%s ", ii, argv[ii]); }
+			dprintf(D_FULLDEBUG, "args: %s\n", myargs.c_str());
+		}
+
+		pid_t ppid;
+		if ( ! getInheritedSocks(socks, COUNTOF(socks), ppid)) {
+			fprintf(stderr, "could not parse inherited sockets from environment\n");
+			exit(1);
+		}
+		if ( ! socks[0] || socks[0]->type() != Stream::reli_sock) {
+			fprintf(stderr, "first inherited socket is not a ReliSock, aborting\n");
+			exit(1);
+		}
+		readfromfile = true;
+		writetosocket = true;
+		backwards = true;
+		longformat = true;
+	}
+	else if (is_dash_arg_prefix(argv[i],"attributes",2)) {
+		if (argc <= i+1 || *(argv[i+1]) == '-') {
+			fprintf(stderr, "Error: Argument -attributes must be followed by a list of attributes\n");
+			exit(1);
+		}
+		i++;
+		projection.initializeFromString(argv[i]);
+	}
     else if (is_dash_arg_prefix(argv[i],"help",1)) {
 		Usage(argv[0],0);
     }
@@ -319,7 +436,7 @@ main(int argc, char* argv[])
 		customFormat = true;
 		++i;
 		std::string where_expr;
-		if (set_print_mask_from_stream(mask, where_expr, argv[i], true) < 0) {
+		if (set_print_mask_from_stream(mask, where_expr, projection, argv[i], true) < 0) {
 			fprintf(stderr, "Error: cannot execute print-format file %s\n", argv[i]);
 			exit (1);
 		}
@@ -336,25 +453,69 @@ main(int argc, char* argv[])
 		i++;
 		constraint.addCustomAND(argv[i]);
     }
-#ifdef HAVE_EXT_POSTGRESQL
+	else if (is_dash_arg_prefix(argv[i],"since",4)) {
+		// make sure we have at least one more argument
+		if (argc <= i+1) {
+			fprintf( stderr, "Error: Argument %s requires another parameter\n", argv[i]);
+			exit(1);
+		}
+		delete sinceExpr; sinceExpr = NULL;
+
+		++i;
+
+		classad::Value val;
+		if (0 != ParseClassAdRvalExpr(argv[i], sinceExpr) || ExprTreeIsLiteral(sinceExpr, val)) {
+			delete sinceExpr; sinceExpr = NULL;
+			// if the stop constraint doesn't parse, or is a literal.
+			// then there are a few special cases...
+			// it might be a job id. or it might be a time value
+			PROC_ID jid;
+			const char * pend;
+			if (StrIsProcId(argv[i], jid.cluster, jid.proc, &pend) && !*pend) {
+				MyString buf;
+				if (jid.proc >= 0) {
+					buf.formatstr("ClusterId == %d && ProcId == %d", jid.cluster, jid.proc);
+				} else {
+					buf.formatstr("ClusterId == %d", jid.cluster);
+					//buf.formatstr("CompletionDate <= %d", jid.cluster);
+				}
+				ParseClassAdRvalExpr(buf.c_str(), sinceExpr);
+			}
+		}
+		if ( ! sinceExpr) {
+			fprintf( stderr, "Error: invalid -since constraint: %s\n\tconstraint must be a job-id, or expression.", argv[i] );
+			exit(1);
+		}
+	}
     else if (is_dash_arg_prefix(argv[i],"completedsince",3)) {
 		i++;
 		if (argc <= i) {
+#ifdef HAVE_EXT_POSTGRESQL
 			fprintf(stderr,
 					"Error: Argument -completedsince requires a date and "
 					"optional timestamp as a parameter.\n");
 			fprintf(stderr,
 					"\t\te.g. condor_history -completedsince \"2004-10-19 10:23:54\"\n");
+#else
+			fprintf(stderr, "Error: Argument -completedsince requires another parameter.\n");
+#endif
 			exit(1);
 		}
 		
-		if (constraint!="") break;
-		completedsince = strdup(argv[i]);
-		parameters[0] = completedsince;
+#ifdef HAVE_EXT_POSTGRESQL
+		completedsince = argv[i];
+		parameters[0] = strdup(completedsince);
 		queryhor.setQuery(HISTORY_COMPLETEDSINCE_HOR,parameters);
 		queryver.setQuery(HISTORY_COMPLETEDSINCE_VER,parameters);
-    }
+#else
+		delete sinceExpr; sinceExpr = NULL;
+		MyString buf; buf.formatstr("CompletionDate <= %s", argv[i]);
+		if (0 != ParseClassAdRvalExpr(buf.c_str(), sinceExpr)) {
+			fprintf( stderr, "Error: '%s' not valid parameter for -completedsince ", argv[i]);
+			exit(1);
+		}
 #endif /* HAVE_EXT_POSTGRESQL */
+    }
 
     else if (sscanf (argv[i], "%d.%d", &cluster, &proc) == 2) {
 		std::string jobconst;
@@ -396,6 +557,10 @@ main(int argc, char* argv[])
                 "\t\te.g. condor_history -name submit.example.com \n");
             exit(1);
         }
+        if (dash_local) {
+            fprintf(stderr, "Error: -local and -name cannot be used together\n");
+            exit(1);
+        }
         g_name = argv[i];
         readfromfile = false;
        #ifdef HAVE_EXT_POSTGRESQL
@@ -418,7 +583,11 @@ main(int argc, char* argv[])
         remoteread = true;
        #endif
     }
-    else {
+	else if (argv[i][0] == '-') {
+		fprintf(stderr, "Error: Unknown argument %s\n", argv[i]);
+		break; // quitting now will print usage and exit with an error below.
+	}
+	else {
 		std::string ownerconst;
 		owner = argv[i];
 		formatstr(ownerconst, "%s == \"%s\"", ATTR_OWNER, owner);
@@ -432,6 +601,12 @@ main(int argc, char* argv[])
   }
   if (i<argc) Usage(argv[0]);
   
+  // for remote queries, default to requesting streamed results
+  // unless the -stream-results flag was passed explicitly.
+  if ( ! readfromfile && ! writetosocket && ! streamresults_specified) {
+	streamresults = true;
+  }
+
 	// Since we only deal with one ad at a time, this doubles the speed of parsing
   classad::ClassAdSetExpressionCaching(false);
  
@@ -443,6 +618,11 @@ main(int argc, char* argv[])
   if ( ! my_constraint.empty() && ParseClassAdRvalExpr( my_constraint.c_str(), constraintExpr ) ) {
 	  fprintf( stderr, "Error:  could not parse constraint %s\n", my_constraint.c_str() );
 	  exit( 1 );
+  }
+
+  if ( use_xml && use_json ) {
+    fprintf( stderr, "Error: Cannot print as both XML and JSON\n" );
+    exit( 1 );
   }
 
 #ifdef HAVE_EXT_POSTGRESQL
@@ -556,17 +736,47 @@ main(int argc, char* argv[])
 	  delete(historySnapshot);
   }
 #endif /* HAVE_EXT_POSTGRESQL */
-  
+
+  if (writetosocket && streamresults) {
+	compat_classad::ClassAd ad;
+	ad.InsertAttr(ATTR_OWNER, 1);
+	ad.InsertAttr("StreamResults", true);
+	dprintf(D_FULLDEBUG, "condor_history: sending streaming ACK header ad:\n");
+	dPrintAd(D_FULLDEBUG, ad, false);
+	if ( ! putClassAd(socks[0], ad) || ! socks[0]->end_of_message()) {
+		dprintf(D_ALWAYS, "condor_history: Failed to write streaming ACK header ad\n");
+		exit(1);
+	}
+  }
+
   if(readfromfile == true) {
+		// some output methods use a whitelist rather than a stringlist projection.
+		for (const char * attr = projection.first(); attr != NULL; attr = projection.next()) {
+			whitelist.insert(attr);
+		}
       readHistoryFromFiles(fileisuserlog, JobHistoryFileName, my_constraint.c_str(), constraintExpr);
   }
   else {
       readHistoryRemote(constraintExpr);
   }
-  
-  
+
+  if (writetosocket) {
+	compat_classad::ClassAd ad;
+	ad.InsertAttr(ATTR_OWNER, 0);
+	ad.InsertAttr(ATTR_NUM_MATCHES, matchCount);
+	ad.InsertAttr("MalformedAds", writetosocket_failcount);
+	ad.InsertAttr("AdCount", adCount);
+	dprintf(D_FULLDEBUG, "condor_history: sending final ad:\n");
+	dPrintAd(D_FULLDEBUG, ad, false);
+	if ( ! putClassAd(socks[0], ad) || ! socks[0]->end_of_message()) {
+		dprintf(D_ALWAYS, "condor_history: Failed to write final ad to client\n");
+		exit(1);
+	}
+	// TJ: if I don't do this. the other end of the connection never gets the final ad....
+	ReliSock * sock = (ReliSock*)(socks[0]);
+	sock->close();
+  }
 #ifdef HAVE_EXT_POSTGRESQL
-  if(completedsince) free(completedsince);
   if(parameters) free(parameters);
   if(dbIpAddr) free(dbIpAddr);
   if(dbName) free(dbName);
@@ -757,6 +967,18 @@ static void init_default_custom_format()
 	AddPrintColumn("COMPLETED",  11,    0, ATTR_COMPLETION_DATE, format_int_date);
 	AddPrintColumn("CMD",       -15, FormatOptionLeftAlign | FormatOptionNoTruncate, ATTR_JOB_CMD, render_job_cmd_and_args);
 
+	static const char* const attrs[] = {
+		ATTR_CLUSTER_ID, ATTR_PROC_ID, ATTR_OWNER, ATTR_JOB_STATUS,
+		ATTR_JOB_REMOTE_WALL_CLOCK, ATTR_JOB_REMOTE_USER_CPU,
+		ATTR_JOB_CMD, ATTR_JOB_ARGUMENTS1, ATTR_JOB_ARGUMENTS2,
+		//ATTR_JOB_DESCRIPTION, "MATCH_EXP_" ATTR_JOB_DESCRIPTION,
+		ATTR_Q_DATE, ATTR_COMPLETION_DATE,
+	};
+	for (int ii = 0; ii < (int)COUNTOF(attrs); ++ii) {
+		const char * attr = attrs[ii];
+		if ( ! projection.contains_anycase(attr)) projection.append(attr);
+	}
+
 	customFormat = TRUE;
 }
 
@@ -890,9 +1112,23 @@ static void printHeader()
 	if ( ! longformat) {
 		if ( ! customFormat) {
 			// hack to get backward-compatible formatting
-			if ( ! wide_format && 80 == wide_format_width)
+			if ( ! wide_format && 80 == wide_format_width) {
 				short_header();
-			else {
+				// for the legacy format output format, set the projection by hand.
+				const char * const attrs[] = {
+					ATTR_CLUSTER_ID, ATTR_PROC_ID,
+					ATTR_JOB_REMOTE_WALL_CLOCK, ATTR_JOB_REMOTE_USER_CPU,
+					ATTR_Q_DATE, ATTR_COMPLETION_DATE,
+					ATTR_JOB_STATUS, ATTR_JOB_PRIO,
+					ATTR_IMAGE_SIZE, ATTR_MEMORY_USAGE,
+					ATTR_OWNER,
+					ATTR_JOB_CMD, ATTR_JOB_ARGUMENTS1,
+				};
+				for (int ii = 0; ii < (int)COUNTOF(attrs); ++ii) {
+					const char * attr = attrs[ii];
+					if ( ! projection.contains_anycase(attr)) projection.append(attr);
+				}
+			} else {
 				init_default_custom_format();
 				if ( ! wide_format || 0 != wide_format_width) {
 					int console_width = wide_format_width;
@@ -911,25 +1147,43 @@ static void printHeader()
 // Read history from a remote schedd
 static void readHistoryRemote(classad::ExprTree *constraintExpr)
 {
-	printHeader();
+	printHeader(); // this has the side effect of setting the projection for the default output
 	if(longformat && use_xml) {
 		std::string out;
 		AddClassAdXMLFileHeader(out);
 		printf("%s\n", out.c_str());
+	} else if( use_json ) {
+		printf( "[\n" );
 	}
 
-	classad::ClassAd ad;
-	classad::ExprList *projList(new classad::ExprList());
-	classad::ExprTree *projTree = static_cast<classad::ExprTree*>(projList);
-	ad.Insert(ATTR_PROJECTION, projTree);
-	ad.Insert(ATTR_REQUIREMENTS, constraintExpr);
+	compat_classad::ClassAd ad;
+	ad.Insert(ATTR_REQUIREMENTS, constraintExpr, false);
 	ad.InsertAttr(ATTR_NUM_MATCHES, specifiedMatch <= 0 ? -1 : specifiedMatch);
+	// in 8.5.6, we can request that the remote side stream the results back. othewise
+	// the 8.4 protocol will only send EOM after the last result, and thus we print nothing
+	// until all of the results have been recieved.
+	if (streamresults || streamresults_specified) {
+		bool want_streamresults = streamresults_specified ? streamresults : true;
+		ad.InsertAttr("StreamResults", want_streamresults);
+	}
+	// only 8.5.6 and later will honor this, older schedd's will just ignore it
+	if (sinceExpr) ad.Insert("Since", sinceExpr, false);
 
 	DCSchedd schedd(g_name.size() ? g_name.c_str() : NULL, g_pool.size() ? g_pool.c_str() : NULL);
 	if (!schedd.locate(Daemon::LOCATE_FOR_LOOKUP)) {
 		fprintf(stderr, "Unable to locate remote schedd (name=%s, pool=%s).\n", g_name.c_str(), g_pool.c_str());
 		exit(1);
 	}
+
+	// now that we know the schedd version, we know if we can send a projection successfully
+	if ( ! projection.isEmpty() && schedd.version()) {
+		CondorVersionInfo v(schedd.version());
+		if (v.built_since_version(8,5,5) || (v.built_since_version(8,4,7) && ! v.built_since_version(8,5,0))) {
+			auto_free_ptr proj_string(projection.print_to_delimed_string(","));
+			ad.Assign(ATTR_PROJECTION, proj_string.ptr());
+		}
+	}
+
 	Sock* sock;
 	if (!(sock = schedd.startCommand(QUERY_SCHEDD_HISTORY, Stream::reli_sock, 0))) {
 		fprintf(stderr, "Unable to send history command to remote schedd;\n"
@@ -943,33 +1197,47 @@ static void readHistoryRemote(classad::ExprTree *constraintExpr)
 		exit(1);
 	}
 
+	bool eom_after_each_ad = false;
 	while (true) {
 		compat_classad::ClassAd ad;
 		if (!getClassAd(sock, ad)) {
-			fprintf(stderr, "Failed to recieve remote ad.\n");
+			fprintf(stderr, "Failed to receive remote ad.\n");
 			exit(1);
 		}
 		long long intVal;
-		if (ad.EvaluateAttrInt(ATTR_OWNER, intVal) && (intVal == 0)) { // Last ad.
+		if (ad.EvaluateAttrInt(ATTR_OWNER, intVal)) {
+			//fprintf(stderr, "Got Owner=%d ad\n", (int)intVal);
 			if (!sock->end_of_message()) {
 				fprintf(stderr, "Unable to close remote socket.\n");
 			}
-			sock->close();
-			std::string errorMsg;
-			if (ad.EvaluateAttrInt(ATTR_ERROR_CODE, intVal) && intVal && ad.EvaluateAttrString(ATTR_ERROR_STRING, errorMsg)) {
-				fprintf(stderr, "Error %lld: %s\n", intVal, errorMsg.c_str());
-				exit(intVal);
-			}
-			if (ad.EvaluateAttrInt("MalformedAds", intVal) && intVal) {
-				fprintf(stderr, "Remote side had parse errors on history file");
-				exit(1);
-			}
-			if (!ad.EvaluateAttrInt(ATTR_NUM_MATCHES, intVal) || (intVal != matchCount)) {
-				fprintf(stderr, "Client and server do not agree on number of ads sent;\n"
-					"Indicates lost network packets or an internal error\n");
+			if (intVal == 1) { // first ad.
+				if ( ! ad.EvaluateAttrBool("StreamResults", eom_after_each_ad)) eom_after_each_ad = true;
+				continue;
+			} else if (intVal == 0) { // last ad
+				sock->close();
+				std::string errorMsg;
+				if (ad.EvaluateAttrInt(ATTR_ERROR_CODE, intVal) && intVal && ad.EvaluateAttrString(ATTR_ERROR_STRING, errorMsg)) {
+					fprintf(stderr, "Error %lld: %s\n", intVal, errorMsg.c_str());
+					exit(intVal);
+				}
+				if (ad.EvaluateAttrInt("MalformedAds", intVal) && intVal) {
+					fprintf(stderr, "Remote side had parse errors on history file");
+					exit(1);
+				}
+				if (!ad.EvaluateAttrInt(ATTR_NUM_MATCHES, intVal) || (intVal != matchCount)) {
+					fprintf(stderr, "Client and server do not agree on number of ads sent;\n"
+						"Indicates lost network packets or an internal error\n");
+					exit(1);
+				}
+			} else {
+				fprintf(stderr, "Error: Unexpected Owner=%d\n", (int)intVal);
 				exit(1);
 			}
 			break;
+		}
+		if (eom_after_each_ad && ! sock->end_of_message()) {
+			fprintf(stderr, "failed recieve EOM after ad\n");
+			exit(1);
 		}
 		matchCount++;
 		printJob(ad);
@@ -979,6 +1247,8 @@ static void readHistoryRemote(classad::ExprTree *constraintExpr)
 		std::string out;
 		AddClassAdXMLFileFooter(out);
 		printf("%s\n", out.c_str());
+	} else if( use_json ) {
+		printf( "]\n" );
 	}
 }
 
@@ -1193,11 +1463,9 @@ static void readHistoryFromFileOld(const char *JobHistoryFileName, const char* c
 
 	// In case of rotated history files, check if we have already reached the number of 
 	// matches specified by the user before reading the next file
-	if (specifiedMatch != 0) { 
-        if (matchCount == specifiedMatch) { // Already found n number of matches, cleanup  
-            fclose(LogFile);
-            return;
-        }
+	if ((specifiedMatch > 0 && matchCount >= specifiedMatch) || (maxAds > 0 && adCount >= maxAds)) {
+		fclose(LogFile);
+		return;
 	}
 
 	if (backwards) {
@@ -1209,6 +1477,8 @@ static void readHistoryFromFileOld(const char *JobHistoryFileName, const char* c
 		std::string out;
 		AddClassAdXMLFileHeader(out);
 		printf("%s\n", out.c_str());
+	} else if( use_json ) {
+		printf( "[\n" );
 	}
 
     while(!EndFlag) {
@@ -1255,6 +1525,11 @@ static void readHistoryFromFileOld(const char *JobHistoryFileName, const char* c
             if (longformat) { 
 				if( use_xml ) {
 					fPrintAdAsXML(stdout, *ad);
+				} else if ( use_json ) {
+					if ( printCount != 0 ) {
+						printf(",\n");
+					}
+					fPrintAdAsJson(stdout, *ad);
 				}
 				else {
 					fPrintAd(stdout, *ad);
@@ -1268,9 +1543,10 @@ static void readHistoryFromFileOld(const char *JobHistoryFileName, const char* c
                 }
             }
 
+            printCount++;
             matchCount++; // if control reached here, match has occured
 
-            if (specifiedMatch != 0) { // User specified a match number
+            if (specifiedMatch > 0) { // User specified a match number
                 if (matchCount == specifiedMatch) { // Found n number of matches, cleanup  
                     if (ad) {
                         delete ad;
@@ -1292,6 +1568,8 @@ static void readHistoryFromFileOld(const char *JobHistoryFileName, const char* c
 		std::string out;
 		AddClassAdXMLFileFooter(out);
 		printf("%s\n", out.c_str());
+	} else if( use_json ) {
+		printf( "]\n" );
 	}
     fclose(LogFile);
     return;
@@ -1320,11 +1598,31 @@ static bool starts_with(const char * p1, const char * p2, const char ** ppEnd = 
 //
 static void printJob(ClassAd & ad)
 {
+	if (writetosocket) {
+		if ( ! putClassAd(socks[0], ad, 0, whitelist.empty() ? NULL : &whitelist)) {
+			++writetosocket_failcount;
+			abort_transfer = true;
+		} else if (streamresults && ! socks[0]->end_of_message()) {
+			++writetosocket_failcount;
+			abort_transfer = true;
+		}
+		return;
+	}
+
+	// NOTE: fPrintAd does not expand the projection, while putClassAd does
+	// so the socket and stdout printing are not quite equivalent. We should
+	// maybe fix that someday, but as far as I know, the non-socket printing
+	// functionality of this code isn't actually used except for debugging.
 	if (longformat) {
 		if (use_xml) {
-			fPrintAdAsXML(stdout, ad);
+			fPrintAdAsXML(stdout, ad, projection.isEmpty() ? NULL : &projection);
+		} else if ( use_json ) {
+			if ( printCount != 0 ) {
+				printf(",\n");
+			}
+			fPrintAdAsJson(stdout, ad, projection.isEmpty() ? NULL : &projection);
 		} else {
-			fPrintAd(stdout, ad);
+			fPrintAd(stdout, ad, false, projection.isEmpty() ? NULL : &projection);
 		}
 		printf("\n");
 	} else {
@@ -1334,6 +1632,7 @@ static void printJob(ClassAd & ad)
 			displayJobShort(&ad);
 		}
 	}
+	printCount++;
 }
 
 // convert list of expressions into a classad
@@ -1344,18 +1643,26 @@ static void printJobIfConstraint(std::vector<std::string> & exprs, const char* c
 		return;
 
 	ClassAd ad;
+	ad.rehash(521); // big enough to prevent regrowing hash table
+
 	size_t ix;
 
 	// convert lines vector into classad.
 	while ((ix = exprs.size()) > 0) {
 		if ( ! ad.Insert(exprs[ix-1])) {
 			const char * pexpr = exprs[ix-1].c_str();
-			dprintf(D_ALWAYS,"failed to create classad; bad expr = '%s'\n", pexpr);
+			dprintf(D_ALWAYS,"condor_history: failed to create classad; bad expr = '%s'\n", pexpr);
 			printf( "\t*** Warning: Bad history file; skipping malformed ad(s)\n" );
 			exprs.clear();
 			return;
 		}
 		exprs.pop_back();
+	}
+	++adCount;
+
+	if (sinceExpr && EvalBool(&ad, sinceExpr)) {
+		maxAds = adCount; // this will force us to stop scanning
+		return;
 	}
 
 	if (!constraint || constraint[0]=='\0' || EvalBool(&ad, constraintExpr)) {
@@ -1370,12 +1677,15 @@ static void printJobAds(ClassAdList & jobs)
 		std::string out;
 		AddClassAdXMLFileHeader(out);
 		printf("%s\n", out.c_str());
+	} else if( use_json ) {
+		printf( "[\n" );
 	}
 
 	jobs.Open();
 	ClassAd	*job;
 	while (( job = jobs.Next())) {
 		printJob(*job);
+		if (abort_transfer) break;
 	}
 	jobs.Close();
 
@@ -1383,6 +1693,8 @@ static void printJobAds(ClassAdList & jobs)
 		std::string out;
 		AddClassAdXMLFileFooter(out);
 		printf("%s\n", out.c_str());
+	} else if( use_json ) {
+		printf( "]\n" );
 	}
 }
 
@@ -1390,7 +1702,7 @@ static void readHistoryFromFileEx(const char *JobHistoryFileName, const char* co
 {
 	// In case of rotated history files, check if we have already reached the number of 
 	// matches specified by the user before reading the next file
-	if ((specifiedMatch != 0) && (matchCount == specifiedMatch)) {
+	if ((specifiedMatch > 0 && matchCount >= specifiedMatch) || (maxAds > 0 && adCount >= maxAds)) {
 		return;
 	}
 
@@ -1413,6 +1725,8 @@ static void readHistoryFromFileEx(const char *JobHistoryFileName, const char* co
 		std::string out;
 		AddClassAdXMLFileHeader(out);
 		printf("%s\n", out.c_str());
+	} else if( use_json ) {
+		printf( "[\n" );
 	}
 
 	std::string line;        // holds the current line from the log file.
@@ -1446,7 +1760,9 @@ static void readHistoryFromFileEx(const char *JobHistoryFileName, const char* co
 			// the current line is the banner that starts (ends) the next job record
 			// if we already hit our match count, we can stop now.
 			banner_line = line;
-			if ((specifiedMatch != 0) && (matchCount == specifiedMatch))
+			if ((specifiedMatch > 0 && matchCount >= specifiedMatch) || (maxAds > 0 && adCount >= maxAds))
+				break;
+			if (abort_transfer)
 				break;
 
 		} else {
@@ -1468,8 +1784,11 @@ static void readHistoryFromFileEx(const char *JobHistoryFileName, const char* co
 	// when we hit the start of the file, we may still have 1 job record to print out.
 	// TODO: verify that the Offset in the banner is 0 at this point. 
 	if (exprs.size() > 0) {
-		if ((specifiedMatch <= 0) || (matchCount < specifiedMatch))
+		if ((specifiedMatch > 0 && matchCount >= specifiedMatch) || (maxAds > 0 && adCount >= maxAds)) {
+			// do nothing
+		} else {
 			printJobIfConstraint(exprs, constraint, constraintExpr);
+		}
 		exprs.clear();
 	}
 
@@ -1477,6 +1796,8 @@ static void readHistoryFromFileEx(const char *JobHistoryFileName, const char* co
 		std::string out;
 		AddClassAdXMLFileFooter(out);
 		printf("%s\n", out.c_str());
+	} else if( use_json ) {
+		printf( "]\n" );
 	}
 	reader.Close();
 }
@@ -1498,10 +1819,10 @@ static const CustomFormatFnTable LocalPrintFormatsTable = SORTED_TOKENER_TABLE(L
 static int set_print_mask_from_stream(
 	AttrListPrintMask & print_mask,
 	std::string & constraint,
+	StringList & attrs,
 	const char * streamid,
 	bool is_filename)
 {
-	StringList attrs;  // used for projection, which we don't currently do. 
 	std::string messages;
 	printmask_aggregation_t aggregation;
 	printmask_headerfooter_t headFoot = STD_HEADFOOT;

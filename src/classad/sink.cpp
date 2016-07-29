@@ -192,9 +192,9 @@ Unparse( string &buffer, const Value &val )
                 buffer += "real(\"INF\")";
             } else if (oldClassAd) {
                 sprintf(tempBuf, "%.16G", real);
-                // %G may print something that looks like an integer.
+                // %G may print something that looks like an integer or exponent.
                 // In that case, tack on a ".0"
-                if (!strchr(tempBuf, '.')) {
+                if (tempBuf[strcspn(tempBuf, ".Ee")] == '\0') {
                     strcat(tempBuf, ".0");
                 }
                 buffer += tempBuf;
@@ -384,7 +384,9 @@ UnparseAux(string &buffer, Operation::OpKind op, ExprTree *t1, ExprTree *t2,
 	if( op==Operation::TERNARY_OP ) {
 		Unparse( buffer, t1 );
 		buffer += " ? ";
-		Unparse( buffer, t2 );
+		if (t2) {
+			Unparse( buffer, t2 );
+		}
 		buffer += " : ";
 		Unparse( buffer, t3 );
 		return;
@@ -634,7 +636,9 @@ UnparseAux(string &buffer,Operation::OpKind op,ExprTree *op1,ExprTree *op2,
 	if( op==Operation::TERNARY_OP ) {
 		Unparse( buffer, op1 );
 		buffer += " ? ";
-		Unparse( buffer, op2 );
+		if (op2) {
+			Unparse( buffer, op2 );
+		}
 		buffer += " : ";
 		Unparse( buffer, op3 );
 		return;

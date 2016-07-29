@@ -208,7 +208,8 @@ doRecursionNew( SubmitDagDeepOptions &deepOpts,
 
 						// Now run condor_submit_dag on the DAG file.
 					if ( runSubmitDag( deepOpts, submitFile.Value(),
-								directory, false ) != 0 ) {
+								directory, shallowOpts.priority,
+								false ) != 0 ) {
 						result = 1;
 					}
 				}
@@ -233,7 +234,7 @@ doRecursionNew( SubmitDagDeepOptions &deepOpts,
 
 					// Now run condor_submit_dag on the DAG file.
 				if ( runSubmitDag( deepOpts, nestedDagFile, directory,
-							false ) != 0 ) {
+							shallowOpts.priority, false ) != 0 ) {
 					result = 1;
 				}
 			}
@@ -691,8 +692,9 @@ void writeSubmitFile( /* const */ SubmitDagDeepOptions &deepOpts,
 	fprintf(pSubFile, "output\t\t= %s\n", shallowOpts.strLibOut.Value());
     fprintf(pSubFile, "error\t\t= %s\n", shallowOpts.strLibErr.Value());
     fprintf(pSubFile, "log\t\t= %s\n", shallowOpts.strSchedLog.Value());
-	if ( ! deepOpts.batchName.empty()) {
-		fprintf(pSubFile, "+JobBatchName\t= \"%s\"\n", deepOpts.batchName.c_str());
+	if ( ! deepOpts.batchName.empty() ) {
+		fprintf(pSubFile, "+%s\t= \"%s\"\n", ATTR_JOB_BATCH_NAME,
+					deepOpts.batchName.c_str());
 	}
 #if !defined ( WIN32 )
     fprintf(pSubFile, "remove_kill_sig\t= SIGUSR1\n" );
@@ -788,9 +790,12 @@ void writeSubmitFile( /* const */ SubmitDagDeepOptions &deepOpts,
 					"the DAGMAN_ALLOW_EVENTS config parameter instead\n");
 	}
 
-	if(!shallowOpts.bPostRun)
-	{
-		args.AppendArg("-DontAlwaysRunPost");
+	if ( shallowOpts.bPostRunSet ) {
+		if (shallowOpts.bPostRun) {
+			args.AppendArg("-AlwaysRunPost");
+		} else {
+			args.AppendArg("-DontAlwaysRunPost");
+		}
 	}
 
 	if(deepOpts.bAllowLogError)
@@ -858,9 +863,9 @@ void writeSubmitFile( /* const */ SubmitDagDeepOptions &deepOpts,
 		args.AppendArg("-Import_env");
 	}
 
-	if( deepOpts.priority != 0 ) {
+	if( shallowOpts.priority != 0 ) {
 		args.AppendArg("-Priority");
-		args.AppendArg(deepOpts.priority);
+		args.AppendArg(shallowOpts.priority);
 	}
 
 	MyString arg_str,args_error;
@@ -1173,7 +1178,21 @@ parseCommandLine(SubmitDagDeepOptions &deepOpts,
 			}
 			else if ( (strArg.find("-dontalwaysrun") != -1) ) // DontAlwaysRunPost
 			{
+				if ( shallowOpts.bPostRunSet && shallowOpts.bPostRun ) {
+					fprintf( stderr, "ERROR: -DontAlwaysRunPost and -AlwaysRunPost are both set!\n" );
+					exit(1);
+				}
+				shallowOpts.bPostRunSet = true;
 				shallowOpts.bPostRun = false;
+			}
+			else if ( (strArg.find("-alwaysrun") != -1) ) // AlwaysRunPost
+			{
+				if ( shallowOpts.bPostRunSet && !shallowOpts.bPostRun ) {
+					fprintf( stderr, "ERROR: -DontAlwaysRunPost and -AlwaysRunPost are both set!\n" );
+					exit(1);
+				}
+				shallowOpts.bPostRunSet = true;
+				shallowOpts.bPostRun = true;
 			}
 			else if ( (strArg.find("-dont_use_default_node_log") != -1) )
 			{
@@ -1194,7 +1213,7 @@ parseCommandLine(SubmitDagDeepOptions &deepOpts,
 					fprintf(stderr, "-priority argument needs a value\n");
 					printUsage();
 				}
-				deepOpts.priority = atoi(argv[++iArg]);
+				shallowOpts.priority = atoi(argv[++iArg]);
 			}
 			else if ( (strArg.find("-dorecov") != -1) )
 			{
@@ -1309,6 +1328,7 @@ int printUsage(int iExitCode)
     printf("        See the condor_submit man page for values.)\n");
     printf("    -NoEventChecks      (Now ignored -- use DAGMAN_ALLOW_EVENTS)\n"); 
     printf("    -DontAlwaysRunPost  (Don't run POST script if PRE script fails)\n");
+    printf("    -AlwaysRunPost      (Run POST script if PRE script fails)\n");
     printf("    -AllowLogError      (Allows the DAG to attempt execution even if the log\n");
     printf("        reading code finds errors when parsing the submit files)\n"); 
 	printf("    -UseDagDir          (Run DAGs in directories specified in DAG file paths)\n");

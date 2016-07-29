@@ -97,6 +97,30 @@ class GahpServer : public Service {
 
 	static void Reaper(Service *,int pid,int status);
 
+	class GahpStatistics {
+	public:
+		GahpStatistics();
+
+		void Publish( ClassAd & ad ) const;
+		void Unpublish( ClassAd & ad ) const;
+
+		static void Tick();
+
+		static int RecentWindowMax;
+		static int RecentWindowQuantum;
+		static int Tick_tid;
+
+		stats_entry_recent<int> CommandsIssued;
+		stats_entry_recent<int> CommandsTimedOut;
+		stats_entry_abs<int> CommandsInFlight;
+		stats_entry_abs<int> CommandsQueued;
+		stats_entry_recent<Probe> CommandRuntime;
+
+		StatisticsPool Pool;
+	};
+
+	GahpStatistics m_stats;
+
 	void read_argv(Gahp_Args &g_args);
 	void read_argv(Gahp_Args *g_args) { read_argv(*g_args); }
 	void write_line(const char *command, const char *debug_cmd = NULL);
@@ -320,6 +344,8 @@ class GahpClient : public Service {
 		int getNotificationTimerId() { return user_timerid; }
 
 		//@}
+
+		void PublishStats( ClassAd *ad );
 
 		void setNormalProxy( Proxy *proxy );
 
@@ -624,6 +650,8 @@ class GahpClient : public Service {
 							   StringList & returnStatus,
 							   std::string & error_code );
 
+		int ec2_gahp_statistics( StringList & returnStatistics );
+
 		int ec2_ping( std::string service_url,
 					  std::string publickeyfile,
 					  std::string privatekeyfile,
@@ -762,62 +790,6 @@ class GahpClient : public Service {
 							   StringList &statuses,
 							   StringList &status_msgs );
 
-		int
-		dcloud_submit( const char *service_url,
-					   const char *username,
-					   const char *password,
-					   const char *image_id,
-					   const char *instance_name,
-					   const char *realm_id,
-					   const char *hwp_id,
-					   const char *hwp_memory,
-					   const char *hwp_cpu,
-					   const char *hwp_storage,
-					   const char *keyname,
-					   const char *userdata,
-					   StringList &attrs );
-
-		int
-		dcloud_status_all( const char *service_url,
-						   const char *username,
-						   const char *password,
-						   StringList &instance_ids,
-						   StringList &statuses );
-
-		int
-		dcloud_action( const char *service_url,
-					   const char *username,
-					   const char *password,
-					   const char *instance_id,
-					   const char *action );
-
-		int
-		dcloud_info( const char *service_url,
-					 const char *username,
-					 const char *password,
-					 const char *instance_id,
-					 StringList &attrs );
-
-		int
-		dcloud_find( const char *service_url,
-					 const char *username,
-					 const char *password,
-					 const char *instance_name,
-					 char **instance_id );
-
-
-		int
-		dcloud_get_max_name_length( const char *service_url,
-									const char *username,
-									const char *password,
-									int *max_length );
-
-		int
-		dcloud_start_auto( const char *service_url,
-						   const char *username,
-						   const char *password,
-						   bool *autostart );
-
 		int boinc_ping();
 
 		int boinc_submit( const char *batch_name,
@@ -892,7 +864,7 @@ class GahpClient : public Service {
 		Gahp_Args* pending_result;
 		time_t pending_timeout;
 		int pending_timeout_tid;
-		bool pending_submitted_to_gahp;
+		time_t pending_submitted_to_gahp;
 		int user_timerid;
 		GahpProxyInfo *normal_proxy;
 		GahpProxyInfo *deleg_proxy;

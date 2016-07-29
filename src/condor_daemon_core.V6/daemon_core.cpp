@@ -49,7 +49,6 @@ static const int DEFAULT_MAXREAPS = 100;
 static const int DEFAULT_PIDBUCKETS = 11;
 static const int DEFAULT_MAX_PID_COLLISIONS = 9;
 static const char* DEFAULT_INDENT = "DaemonCore--> ";
-static const int MAX_TIME_SKIP = (60*20); //20 minutes
 static const int MIN_FILE_DESCRIPTOR_SAFETY_LIMIT = 20;
 static const int MIN_REGISTERED_SOCKET_SAFETY_LIMIT = 15;
 static const int DC_PIPE_BUF_SIZE = 65536;
@@ -116,6 +115,8 @@ CRITICAL_SECTION Big_fat_mutex; // coarse grained mutex for debugging purposes
 #if !defined(CLONE_NEWPID)
 #define CLONE_NEWPID 0x20000000
 #endif
+
+#include "systemd_manager.h"
 
 static const char* EMPTY_DESCRIP = "<NULL>";
 
@@ -402,6 +403,8 @@ DaemonCore::DaemonCore(int PidSize, int ComSize,int SigSize,
 	super_dc_ssock = NULL;
 	m_iMaxReapsPerCycle = 1;
     m_iMaxAcceptsPerCycle = 1;
+
+	m_MaxTimeSkip = 60 * 20;  // 20 minutes
 
 	inheritedSocks[0] = NULL;
 	inServiceCommandSocket_flag = FALSE;
@@ -2973,6 +2976,8 @@ DaemonCore::reconfig(void) {
 	// Maximum number of bytes read from a stdout/stderr pipes.
 	// Default is 10k (10*1024 bytes)
 	maxPipeBuffer = param_integer("PIPE_BUFFER_MAX", 10240);
+
+	m_MaxTimeSkip = param_integer("MAX_TIME_SKIP", 1200, 0);
 
     m_iMaxAcceptsPerCycle = param_integer("MAX_ACCEPTS_PER_CYCLE", 8);
     if( m_iMaxAcceptsPerCycle != 1 ) {
@@ -6767,6 +6772,53 @@ int DaemonCore::Create_Process(
     double delta_runtime = 0;
 	dprintf(D_DAEMONCORE,"In DaemonCore::Create_Process(%s,...)\n",executable ? executable : "NULL");
 
+	bool initialized_socket = false;
+#ifndef WIN32
+	if (HAS_DCJOBOPT_USE_SYSTEMD_INET_SOCKET(job_opt_mask))
+	{
+		const condor_utils::SystemdManager &sd = condor_utils::SystemdManager::GetInstance();
+		const std::vector<int> fds = sd.GetFDs();
+		if (!fds.size())
+		{
+			dprintf(D_ALWAYS, "Create_Process: requested to use systemd INET socket, but none passed.\n");
+			goto wrapup;
+		}
+		for (std::vector<int>::const_iterator it = fds.begin(); it != fds.end(); it++)
+		{
+			// Create a duplicate socket - we give the duplicate FD to the relisock
+			// which will close it automatically.  We have to keep the copy from systemd
+			// in case if we need to respawn the daemon.  If we don't, we'll get an
+			// "Address already in use" error when we respawn.
+			int new_fd = dup(*it);
+			if (new_fd == -1)
+			{
+				dprintf(D_ALWAYS, "Failed to duplicate systemd TCP socket (errno=%d, %s).\n", errno, strerror(errno));
+				goto wrapup;
+			}
+			socks.push_back(SockPair());
+			socks.back().has_relisock(true);
+			if (!socks.back().rsock()->attach_to_file_desc(new_fd))
+			{
+				dprintf(D_ALWAYS, "Failed to attach systemd socket to ReliSock.\n");
+				goto wrapup;
+			}
+			int flags = fcntl(*it, F_GETFD);
+			if (flags == -1)
+			{
+				dprintf(D_ALWAYS, "Create_Process: Unable to get flags on systemd TCP socket.\n");
+				goto wrapup;
+			}
+			flags &= ~FD_CLOEXEC;
+			if (fcntl(*it, F_SETFD, flags) == -1)
+			{
+				dprintf(D_ALWAYS, "Create_Process: Unable to set flags on systemd TCP socket.\n");
+				goto wrapup;
+			}
+		}
+		dprintf(D_FULLDEBUG, "Create_Process: Passing systemd TCP socket to child process.\n");
+		initialized_socket = true;
+	}
+#endif
 	// First do whatever error checking we can that is not platform specific
 
 	// check reaper_id validity.  note: reaper id of 0 means no reaper wanted.
@@ -6898,7 +6950,7 @@ int DaemonCore::Create_Process(
 	}
 	if ( (!enabled_shared_endpoint && want_command_port != FALSE) || (want_command_port > 1 || want_udp_command_port > 1) ) {
 		inherit_handles = TRUE;
-		if (!InitCommandSockets(want_command_port, want_udp_command_port, socks, want_udp, false)) {
+		if (!initialized_socket && !InitCommandSockets(want_command_port, want_udp_command_port, socks, want_udp, false)) {
 				// error messages already printed by InitCommandSockets()
 			goto wrapup;
 		}
@@ -8561,10 +8613,83 @@ DaemonCore::Proc_Family_Cleanup()
 	}
 }
 
+#define REFACTOR_SOCK_INHERIT 1
+#ifdef REFACTOR_SOCK_INHERIT
+// extracts the parent address and inherited socket information from the given inherit string
+// then tokenizes the remaining items from the inherit string into the supplied StringList.
+// return value: number of entries in the socks[] array that were populated.
+// note: the size of the socks array should be 1 more than the maximum
+//
+int extractInheritedSocks (
+	const char * inherit,  // in: inherit string, usually from CONDOR_INHERIT environment variable
+	pid_t & ppid,          // out: pid of the parent
+	std::string & psinful, // out: sinful of the parent
+	Stream* socks[],   // out: filled in with items from the inherit string
+	int     cMaxSocks, // in: number of items in the socks array
+	StringList & remaining_items) // out: unparsed items from the inherit string are added to this
+{
+	if ( ! inherit || ! inherit[0])
+		return 0;
+
+	int cSocks = 0;
+	StringTokenIterator list(inherit, 100, " ");
+
+	// first is parent pid and sinful
+	const char * ptmp = list.first();
+	if (ptmp) {
+		ppid = atoi(ptmp);
+		ptmp = list.next();
+		if (ptmp) psinful = ptmp;
+	}
+
+	// inherit cedar socks
+	ptmp = list.next();
+	while (ptmp && (*ptmp != '0')) {
+		if (cSocks >= cMaxSocks) {
+			break;
+		}
+		switch (*ptmp) {
+			case '1' : {
+				// inherit a relisock
+				ReliSock * rsock = new ReliSock();
+				ptmp = list.next();
+				rsock->serialize(ptmp);
+				rsock->set_inheritable(FALSE);
+				dprintf(D_DAEMONCORE,"Inherited a ReliSock\n");
+				// place into array...
+				socks[cSocks++] = (Stream *)rsock;
+				break;
+			}
+			case '2': {
+				SafeSock * ssock = new SafeSock();
+				ptmp = list.next();
+				ssock->serialize(ptmp);
+				ssock->set_inheritable(FALSE);
+				dprintf(D_DAEMONCORE,"Inherited a SafeSock\n");
+				// place into array...
+				socks[cSocks++] = (Stream *)ssock;
+				break;
+			}
+			default:
+				EXCEPT("Daemoncore: Can only inherit SafeSock or ReliSocks, not %c (%d)", *ptmp, (int)*ptmp);
+				break;
+		} // end of switch
+		ptmp = list.next();
+	}
+
+	// put the remainder of the inherit items into a stringlist for use by the caller.
+	while ((ptmp = list.next())) {
+		remaining_items.append(ptmp);
+	}
+	remaining_items.rewind();
+
+	return cSocks;
+}
+#endif
+
 void
 DaemonCore::Inherit( void )
 {
-	char *inheritbuf = NULL;
 	int numInheritedSocks = 0;
 	char *ptmp;
 	static bool already_inherited = false;
@@ -8588,6 +8713,24 @@ DaemonCore::Inherit( void )
 	*/
 	const char *envName = EnvGetName( ENV_INHERIT );
 	const char *tmp = GetEnv( envName );
+#ifdef REFACTOR_SOCK_INHERIT
+	if (tmp) {
+		dprintf ( D_DAEMONCORE, "%s: \"%s\"\n", envName, tmp );
+		UnsetEnv( envName );
+	} else {
+		dprintf ( D_DAEMONCORE, "%s: is NULL\n", envName );
+	}
+
+	StringList inherit_list;
+	numInheritedSocks = extractInheritedSocks(tmp,
+		ppid, saved_sinful_string,
+		inheritedSocks, COUNTOF(inheritedSocks),
+		inherit_list);
+	if (ppid) {
+		// insert ppid into table
+		dprintf(D_DAEMONCORE,"Parent PID = %d\n", ppid);
+#else
+	char *inheritbuf = NULL;
 	if ( tmp != NULL ) {
 		inheritbuf = strdup( tmp );
 		dprintf ( D_DAEMONCORE, "%s: \"%s\"\n", envName, inheritbuf );
@@ -8609,12 +8752,13 @@ DaemonCore::Inherit( void )
 		// insert ppid into table
 		dprintf(D_DAEMONCORE,"Parent PID = %s\n",ptmp);
 		ppid = atoi(ptmp);
+		ptmp=inherit_list.next();
+		saved_sinful_string = ptmp;
+#endif
 		PidEntry *pidtmp = new PidEntry;
 		pidtmp->pid = ppid;
-		ptmp=inherit_list.next();
-		dprintf(D_DAEMONCORE,"Parent Command Sock = %s\n",ptmp);
-		saved_sinful_string = ptmp;
-		pidtmp->sinful_string = ptmp;
+		dprintf(D_DAEMONCORE,"Parent Command Sock = %s\n",saved_sinful_string.c_str());
+		pidtmp->sinful_string = saved_sinful_string.c_str();
 		pidtmp->is_local = TRUE;
 		pidtmp->parent_is_local = TRUE;
 		pidtmp->reaper_id = 0;
@@ -8662,6 +8806,12 @@ DaemonCore::Inherit( void )
 		}
 #endif
 
+#ifdef REFACTOR_SOCK_INHERIT
+	if (numInheritedSocks >= MAX_SOCKS_INHERITED) {
+		EXCEPT("MAX_SOCKS_INHERITED reached.");
+	}
+	inheritedSocks[numInheritedSocks] = NULL;
+#else
 		// inherit cedar socks
 		ptmp=inherit_list.next();
 		while ( ptmp && (*ptmp != '0') ) {
@@ -8697,6 +8847,7 @@ DaemonCore::Inherit( void )
 			ptmp=inherit_list.next();
 		}
 		inheritedSocks[numInheritedSocks] = NULL;
+#endif
 
 		// inherit our "command" cedar socks.  they are sent
 		// relisock, then safesock, then a "0".
@@ -9539,7 +9690,7 @@ int DaemonCore::HandleProcessExit(pid_t pid, int exit_status)
 	}
 	//Delete the session information.
 	if(pidentry->child_session_id)
-		getSecMan()->session_cache.remove(pidentry->child_session_id);
+		getSecMan()->session_cache->remove(pidentry->child_session_id);
 	// Now remove this pid from our tables ----
 		// remove from hash table
 	pidTable->remove(pid);
@@ -10628,7 +10779,7 @@ DaemonCore::InitSettableAttrsList( const char* /* subsys */, int i )
 
 KeyCache*
 DaemonCore::getKeyCache() {
-	return &sec_man->session_cache;
+	return sec_man->session_cache;
 }
 
 SecMan* DaemonCore :: getSecMan()
@@ -10793,7 +10944,7 @@ DaemonCore::CheckForTimeSkip(time_t time_before, time_t okay_delta)
 		represent a given time_t value.  This means
 		different code paths depending on which variable is
 		larger. */
-	if((time_after + MAX_TIME_SKIP) < time_before) {
+	if((time_after + m_MaxTimeSkip) < time_before) {
 		// We've jumped backward in time.
 
 		// If this test is ever made more aggressive, remember that
@@ -10802,7 +10953,7 @@ DaemonCore::CheckForTimeSkip(time_t time_before, time_t okay_delta)
 
 		delta = -(int)(time_before - time_after);
 	}
-	if((time_before + okay_delta*2 + MAX_TIME_SKIP) < time_after) {
+	if((time_before + okay_delta*2 + m_MaxTimeSkip) < time_after) {
 		/*
 		We've jumped forward in time.
 

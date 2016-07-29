@@ -282,6 +282,7 @@ ClassAd *CreateJobAd( const char *owner, int universe, const char *cmd )
 
 	job_ad->Assign( ATTR_NUM_CKPTS, 0 );
 	job_ad->Assign( ATTR_NUM_JOB_STARTS, 0 );
+	job_ad->Assign( ATTR_NUM_JOB_COMPLETIONS, 0 );
 	job_ad->Assign( ATTR_NUM_RESTARTS, 0 );
 	job_ad->Assign( ATTR_NUM_SYSTEM_HOLDS, 0 );
 	job_ad->Assign( ATTR_JOB_COMMITTED_TIME, 0 );
@@ -403,4 +404,16 @@ bool getPathToUserLog(ClassAd *job_ad, MyString &result,
 	}
 
 	return ret_val;
+}
+
+// tokenize the input string, and insert tokens into the attrs set
+bool insert_tokens_as_attrs(const char * str, classad::References & attrs, const char * delims=NULL)
+{
+	if (str && str[0]) {
+		StringTokenIterator it(str, 40, delims ? delims : ", \t\r\n");
+		const std::string * attr;
+		while ((attr = it.next_string())) { attrs.insert(*attr); }
+		return true;
+	}
+	return false;
 }

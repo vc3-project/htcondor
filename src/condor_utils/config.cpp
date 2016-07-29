@@ -31,6 +31,14 @@
 #include "condor_uid.h"
 #include "my_popen.h"
 #include "printf_format.h"
+#include "CondorError.h"
+
+#define METAKNOBS_WITH_ARGS 1
+#ifdef METAKNOBS_WITH_ARGS
+char * expand_meta_args(const char *value, std::string & argstr);
+bool has_meta_args(const char * value);
+#endif
+
 
 #if defined(__cplusplus)
 extern "C" {
@@ -207,8 +215,77 @@ is_piped_command(const char* filename)
 	return retVal;
 }
 
+// recursive brace matching, scans for a close that matches either *p or the
+// appropriate close if *p is ([{ or <.  Will recurse if a brace in recurse_set
+// is found while scanning. max recursion depth is depth, returns NULL when
+// max recursion depth is exceeded.
+// 
+const char * find_close_brace(const char * p, int depth, const char * recurse_set=NULL) {
+	if (depth < 0) return NULL;
+	char open_ch = *p;
+	if ( ! open_ch) return NULL;
+	char close_ch = open_ch;
+	switch (close_ch) {
+		case '(': close_ch = ')'; break;
+		case '[': close_ch = ']'; break;
+		case '{': close_ch = '}'; break;
+		case '<': close_ch = '>'; break;
+	}
+	while (*++p != close_ch) {
+		if (*p == open_ch || (recurse_set && strchr(recurse_set, *p))) {
+			const char * e = find_close_brace(p, depth-1, recurse_set);
+			if ( ! e) return NULL;
+			p = e;
+		}
+	}
+	return p;
+}
 
-int read_meta_config(MACRO_SOURCE & source, int depth, const char *name, const char * rhs, MACRO_SET& macro_set, const char * subsys)
+class MetaKnobAndArgs {
+public:
+	std::string knob;
+	std::string args;
+	std::string extra;
+
+	MetaKnobAndArgs(const char * p=NULL) { if (p) init_from_string(p); }
+
+	const char* init_from_string(const char * p) {
+		// skip leading whitespace and ,
+		while (*p && (isspace(*p) || *p == ',')) ++p;
+		// parse knob name
+		const char * e = p;
+		while (*e && ( ! isspace(*e) && *e != ',' && *e != '(')) ++e;
+		if (e == p)
+			return e;
+		knob.assign (p, e-p);
+
+		p = e;
+		while (*p && isspace(*p)) ++p;
+
+		// knob MIGHT be followed by arguments in ()
+		// if there are arguments, capture them using a recursive scanner
+		// that handles nested () and [].
+		if (*p == '(') {
+			e = find_close_brace(p, 25, "([");
+			if (e && *e == ')') {
+				args.assign(p+1, (e-p)-1);
+				p = e;
+			}
+			++p;
+			while (*p && isspace(*p)) ++p;
+		}
+
+		// if there is non-whitespace after the knob/args and before the next ,
+		// capture it.
+		e = p;
+		while (*e && *e != ',') ++e;
+		if (e > p+1) { extra.assign(p, (e-p)-1); }
+		return e;
+	}
+};
+
+
+int read_meta_config(MACRO_SOURCE & source, int depth, const char *name, const char * rhs, MACRO_SET& macro_set, MACRO_EVAL_CONTEXT & ctx)
 {
 #ifdef GUESS_METAKNOB_CATEGORY
 	std::string nameguess;
@@ -230,30 +307,68 @@ int read_meta_config(MACRO_SOURCE & source, int depth, const char *name, const c
 #endif
 
 	if ( ! name || ! name[0]) {
-		fprintf(stderr,
-				"Configuration Error: use needs a keyword before : %s\n", rhs);
+		macro_set.push_error(stderr, -1, NULL, "Error: use needs a keyword before : %s\n", rhs);
 		return -1;
 	}
 
 	// the SUBMIT macro set stores metaknobs directly in it's defaults table.
 	if (macro_set.options & CONFIG_OPT_SUBMIT_SYNTAX) {
 
+#ifdef METAKNOBS_WITH_ARGS
+		MetaKnobAndArgs mag;
+		const char * rhs_remain = rhs;
+		while (*rhs_remain) {
+			// mag.init_from_string returns a pointer to the point at which it stopped parsing
+			const char * e = mag.init_from_string(rhs_remain);
+			if ( ! e || e == rhs_remain) break;
+			rhs_remain = e;
+			const char * item = mag.knob.c_str();
+
+			const char * psz = NULL;
+			const MACRO_ITEM * p = find_macro_item(item, name, macro_set);
+			if (p) {
+				if (p && macro_set.metat) {
+					macro_set.metat[p - macro_set.table].use_count += 1;
+				}
+				psz = p->raw_value;
+			} else {
+				std::string metaname;
+				formatstr(metaname, "$%s.%s", name, item);
+				const MACRO_DEF_ITEM * pd = find_macro_def_item(metaname.c_str(), macro_set, ctx.use_mask);
+				if (pd && pd->def) psz = pd->def->psz;
+			}
+			if ( ! psz) {
+				macro_set.push_error(stderr, -1, "\n", "ERROR: use %s: does not recognise %s\n", name, mag.knob.c_str());
+				return -1;
+			}
+			auto_free_ptr expanded(NULL);
+			if ( ! mag.args.empty() || has_meta_args(psz)) {
+				expanded.set(expand_meta_args(psz, mag.args));
+				psz = expanded.ptr();
+			}
+#else
 		StringList items(rhs);
 		items.rewind();
 		char * item;
 		while ((item = items.next()) != NULL) {
 			std::string metaname;
 			formatstr(metaname, "$%s.%s", name, item);
-			const char * value = lookup_macro_def(metaname.c_str(), subsys, macro_set);
-			if ( ! value) {
-				fprintf(stderr, "\nERROR: use %s: does not recognise %s\n", name, item);
+			const MACRO_DEF_ITEM * p = find_macro_def_item(metaname.c_str(), macro_set, ctx.use_mask);
+			if ( ! p) {
+				macro_set.push_error(stderr, -1, "\n", "ERROR: use %s: does not recognise %s\n", name, item);
 				return -1;
 			}
-			int ret = Parse_config_string(source, depth, value, macro_set, subsys);
+			const char * psz = p->def->psz;
+#endif
+			int ret = Parse_config_string(source, depth, psz, macro_set, ctx);
 			if (ret < 0) {
-				const char * msg = "Internal Submit Error: use %s: %s is invalid\n";
-				if (ret == -2) msg = "\nERROR: use %s: %s nesting too deep\n"; 
-				fprintf(stderr, msg, name, item);
+				const char * pre = "Internal Submit";
+				const char * msg = "Error: use %s: %s is invalid\n";
+				if (ret == -2) {
+					pre = "\n";
+					msg = "ERROR: use %s: %s nesting too deep\n"; 
+				}
+				macro_set.push_error(stderr, ret, pre, msg, name, item);
 				return ret;
 			}
 		}
@@ -264,23 +379,45 @@ int read_meta_config(MACRO_SOURCE & source, int depth, const char *name, const c
 	if ( ! ptable)
 		return -1;
 
+#ifdef METAKNOBS_WITH_ARGS
+	MetaKnobAndArgs mag;
+	const char * rhs_remain = rhs;
+	while (*rhs_remain) {
+		// mag.init_from_string returns a pointer to the point at which it stopped parsing
+		const char * e = mag.init_from_string(rhs_remain);
+		if ( ! e || e == rhs_remain) break;
+		rhs_remain = e;
+		const char * item = mag.knob.c_str();
+#else
 	StringList items(rhs);
 	items.rewind();
 	char * item;
 	while ((item = items.next()) != NULL) {
+#endif
 		const char * value = param_meta_table_string(ptable, item);
 		if ( ! value) {
-			fprintf(stderr,
-					"Configuration Error: use %s: does not recognise %s\n",
+			macro_set.push_error(stderr, -1, NULL, 
+					"Error: use %s: does not recognise %s\n",
 					name, item);
 			return -1;
 		}
 		source.meta_id = param_default_get_source_meta_id(name, item);
-		int ret = Parse_config_string(source, depth, value, macro_set, subsys);
+#ifdef METAKNOBS_WITH_ARGS
+		auto_free_ptr expanded(NULL);
+		if ( ! mag.args.empty() || has_meta_args(value)) {
+			expanded.set(expand_meta_args(value, mag.args));
+			value = expanded.ptr();
+		}
+#endif
+		int ret = Parse_config_string(source, depth, value, macro_set, ctx);
 		if (ret < 0) {
-			const char * msg = "Internal Configuration Error: use %s: %s is invalid\n";
-			if (ret == -2) msg = "Configuration Error: use %s: %s nesting too deep\n"; 
-			fprintf(stderr, msg, name, item);
+			const char * pre = "Internal Configuration";
+			const char * msg = "Error: use %s: %s is invalid\n";
+			if (ret == -2) {
+				pre = "Configuration";
+				msg = "Error: use %s: %s nesting too deep\n"; 
+			}
+			macro_set.push_error(stderr, ret, pre, msg, name, item);
 			return ret;
 		}
 	}
@@ -301,86 +438,6 @@ is_valid_command(const char* cmdToExecute)
 	}
 
 	return retVal;
-}
-
-/*
-** Special version of expand_macro that only expands 'self' references. i.e. it only
-** expands the macro whose name is specified in the self argument.
-** Expand parameter references of the form "left$(self)right".  This
-** is deceptively simple, but does handle multiple and or nested references.
-** We only expand references to to the parameter specified by self. use expand_macro
-** to expand all references. 
-*/
-extern "C" char *
-expand_self_macro(const char *value,
-			 MACRO_SET& macro_set,
-			 const char *self,
-			 const char *subsys)
-{
-	char *tmp = strdup( value );
-	char *left, *name, *right;
-	const char *tvalue;
-	char *rval;
-
-	ASSERT(self != NULL && self[0] != 0);
-
-	// to avoid infinite recursive expansion, we have to look for both "subsys.self" and "self"
-	// so we want to set selfless equal to the part of self after the prefix.
-	const char *selfless = NULL; // if self=="master.foo" and subsys=="master", then this contains "foo"
-	if (subsys) {
-		const char * a = subsys;
-		const char * b = self;
-		while (*a && (tolower(*a) == tolower(*b))) {
-			++a; ++b;
-		}
-		// if a now points to a 0, and b now points to ".", then self contains subsys as a prefix.
-		if (0 == a[0] && '.' == b[0] && b[1] != 0) {
-			selfless = b+1;
-		}
-	}
-
-	bool all_done = false;
-	while( !all_done ) {		// loop until all done expanding
-		all_done = true;
-
-		if (find_config_macro(tmp, &left, &name, &right, self) ||
-			(selfless && find_config_macro(tmp, &left, &name, &right, selfless)) ) {
-			all_done = false;
-		   #ifdef COLON_DEFAULT_FOR_MACRO_EXPAND
-			char * pcolon = strchr(name, ':');
-			if (pcolon) { *pcolon++ = 0; }
-		   #endif
-			tvalue = lookup_macro(name, subsys, macro_set, 0);
-			if (subsys && ! tvalue)
-				tvalue = lookup_macro(name, NULL, macro_set, 0);
-
-				// Note that if 'name' has been explicitly set to nothing,
-				// tvalue will _not_ be NULL so we will not call
-				// param_default_string().  See gittrack #1302
-			if (tvalue == NULL
-				&& macro_set.defaults
-				&& (macro_set.options & CONFIG_OPT_DEFAULTS_ARE_PARAM_INFO) != 0) {
-				tvalue = param_default_string(name, subsys);
-			}
-		   #ifdef COLON_DEFAULT_FOR_MACRO_EXPAND
-			if (pcolon && ( ! tvalue || ! tvalue[0])) {
-				tvalue = pcolon;
-			}
-		   #endif
-			if( tvalue == NULL ) {
-				tvalue = "";
-			}
-
-			rval = (char *)MALLOC( (unsigned)(strlen(left) + strlen(tvalue) +
-											  strlen(right) + 1));
-			ASSERT( rval != NULL );
-			(void)sprintf( rval, "%s%s%s", left, tvalue, right );
-			FREE( tmp );
-			tmp = rval;
-		}
-	}
-
-	return( tmp );
 }
 
 
@@ -537,7 +594,7 @@ static bool is_crufty_bool(const char * expr, bool & result)
 }
 // returns true if valid.
 //
-static bool Evaluate_config_if(const char * expr, bool & result, std::string & err_reason, MACRO_SET & macro_set, const char * subsys)
+static bool Evaluate_config_if(const char * expr, bool & result, std::string & err_reason, MACRO_SET & macro_set, MACRO_EVAL_CONTEXT & ctx)
 {
 	expr_character_t ec = Characterize_config_if_expression(expr, true);
 	if (ec == CIFT_NUMBER || ec == CIFT_BOOL) {
@@ -599,12 +656,7 @@ static bool Evaluate_config_if(const char * expr, bool & result, std::string & e
 			// if it's an identifier, do macro lookup.
 			if (ec2 == CIFT_IDENTIFIER) {
 				const char * name = ptr;
-				const char * tvalue = lookup_macro(name, subsys, macro_set);
-				if (subsys && ! tvalue)
-					tvalue = lookup_macro(name, NULL, macro_set);
-				if ( ! tvalue && macro_set.defaults) {
-					tvalue = param_default_string(name, subsys);
-				}
+				const char * tvalue = lookup_macro(name, macro_set, ctx);
 				if ( ! tvalue && is_crufty_bool(name, result)) {
 					tvalue = "true"; // any non empty value will do here.
 				}
@@ -639,6 +691,16 @@ static bool Evaluate_config_if(const char * expr, bool & result, std::string & e
 
 #if 1
 	// TODO: convert version & defined to booleans, and then evaluate the result as a ClassAd expression
+
+	if ((ec == CIFT_COMPLEX) && ctx.is_context_ex && reinterpret_cast<MACRO_EVAL_CONTEXT_EX&>(ctx).ad) {
+		classad::Value val;
+		if (reinterpret_cast<MACRO_EVAL_CONTEXT_EX&>(ctx).ad->EvaluateExpr(expr, val)) {
+			bool bval;
+			if (val.IsBooleanValueEquiv(bval)) {
+				return bval;
+			}
+		}
+	}
 #else // this code sort of works, but isn't necessarily the way we want to go
 	// the expression MAY be evaluatable by the classad library, if it is, then great
 	int ival;
@@ -658,7 +720,7 @@ static bool Evaluate_config_if(const char * expr, bool & result, std::string & e
 	return false;
 }
 
-bool Test_config_if_expression(const char * expr, bool & result, std::string & err_reason, MACRO_SET& macro_set, const char * subsys)
+bool Test_config_if_expression(const char * expr, bool & result, std::string & err_reason, MACRO_SET& macro_set, MACRO_EVAL_CONTEXT & ctx)
 {
 	bool value = result;
 	bool inverted = false;
@@ -666,7 +728,7 @@ bool Test_config_if_expression(const char * expr, bool & result, std::string & e
 	// optimize the simple case by not bothering to macro expand if there are no $ in the expression
 	char * expanded = NULL; // so we know whether to free the macro expansion
 	if (strstr(expr, "$")) {
-		expanded = expand_macro(expr, macro_set, true, subsys);
+		expanded = expand_macro(expr, macro_set, ctx);
 		if ( ! expanded) return false;
 		expr = expanded;
 		char * ptr = expanded + strlen(expanded);
@@ -686,7 +748,7 @@ bool Test_config_if_expression(const char * expr, bool & result, std::string & e
 		// we do this for that if $(foo) is false when foo isn't defined.
 		valid = true; value = false;
 	} else {
-		valid = Evaluate_config_if(expr, value, err_reason, macro_set, subsys);
+		valid = Evaluate_config_if(expr, value, err_reason, macro_set, ctx);
 	}
 
 	if (expanded) free(expanded);
@@ -738,10 +800,10 @@ public:
 		return top > 1;
 	}
 	bool end_if() { istate &= ~top; top >>= 1; if (!top) { top = state = 1; istate = estate = 0; return false; } return true; }
-	bool line_is_if(const char * line, std::string & errmsg, MACRO_SET& macro_set, const char * subsys);
+	bool line_is_if(const char * line, std::string & errmsg, MACRO_SET& macro_set, MACRO_EVAL_CONTEXT & ctx);
 };
 
-bool ConfigIfStack::line_is_if(const char * line, std::string & errmsg, MACRO_SET& macro_set, const char * subsys)
+bool ConfigIfStack::line_is_if(const char * line, std::string & errmsg, MACRO_SET& macro_set, MACRO_EVAL_CONTEXT & ctx)
 {
 	if (starts_with_ignore_case(line,"if") && (isspace(line[2]) || !line[2])) {
 		const char * expr = line+2;
@@ -749,7 +811,7 @@ bool ConfigIfStack::line_is_if(const char * line, std::string & errmsg, MACRO_SE
 
 		bool bb = this->enabled();
 		std::string err_reason;
-		if (bb && ! Test_config_if_expression(expr, bb, err_reason, macro_set, subsys)) {
+		if (bb && ! Test_config_if_expression(expr, bb, err_reason, macro_set, ctx)) {
 			formatstr(errmsg, "%s is not a valid if condition", expr);
 			if (!err_reason.empty()) { errmsg += " because "; errmsg += err_reason; }
 		} else if ( ! this->begin_if(bb)) {
@@ -773,7 +835,7 @@ bool ConfigIfStack::line_is_if(const char * line, std::string & errmsg, MACRO_SE
 		std::string err_reason;
 
 		bool bb = !(estate & top) && ((state & (top-1)) == (top-1));	// if an outer if prunes this, don't evaluate the expression.
-		if (bb && ! Test_config_if_expression(expr, bb, err_reason, macro_set, subsys)) {
+		if (bb && ! Test_config_if_expression(expr, bb, err_reason, macro_set, ctx)) {
 			formatstr(errmsg, "%s is not a valid elif condition", expr);
 			if (!err_reason.empty()) { errmsg += " because "; errmsg += err_reason; }
 		} else if ( ! this->begin_elif(bb)) {
@@ -798,7 +860,7 @@ bool ConfigIfStack::line_is_if(const char * line, std::string & errmsg, MACRO_SE
 // and insert the resulting declarations into the given macro set.
 // this code is used to parse meta-knob definitions.
 //
-int Parse_config_string(MACRO_SOURCE & source, int depth, const char * config, MACRO_SET& macro_set, const char * subsys)
+int Parse_config_string(MACRO_SOURCE & source, int depth, const char * config, MACRO_SET& macro_set, MACRO_EVAL_CONTEXT & ctx)
 {
 	const bool is_submit = macro_set.options & CONFIG_OPT_SUBMIT_SYNTAX;
 	source.meta_off = -1;
@@ -809,12 +871,17 @@ int Parse_config_string(MACRO_SOURCE & source, int depth, const char * config, M
 	lines.rewind();
 	char * line;
 	while ((line = lines.next()) != NULL) {
+		// trim leading and trailing whitespace
+		//while (*line && isspace(*line)) ++line;
+		//int ix = strlen(line);
+		//while (ix > 0 && isspace(line[ix-1])) { line[ix-1] = 0; --ix; }
+
 		++source.meta_off;
 		if( line[0] == '#' || blankline(line) )
 			continue;
 
 		std::string errmsg;
-		if (ifstack.line_is_if(line, errmsg, macro_set, subsys)) {
+		if (ifstack.line_is_if(line, errmsg, macro_set, ctx)) {
 			if ( ! errmsg.empty()) {
 				dprintf(D_CONFIG | D_FAILURE, "Parse_config if error: '%s' line: %s\n", errmsg.c_str(), line);
 				return -1;
@@ -868,13 +935,15 @@ int Parse_config_string(MACRO_SOURCE & source, int depth, const char * config, M
 			return -1;
 		}
 
+		while (*ptr && isspace(*ptr)) ++ptr;
+
 		// ptr now points to the first non-space character of the right hand side, it may point to a \0
 		const char * rhs = ptr;
 
 		// Expand the knob name - do we allow this??
 		/*
 		PRAGMA_REMIND("tj: allow macro expansion in knob names in meta_params?")
-		char* expanded_name = expand_macro(name, macro_set);
+		char* expanded_name = expand_macro(name, macro_set, ctx);
 		if (expanded_name == NULL) {
 			return -1;
 		}
@@ -890,7 +959,7 @@ int Parse_config_string(MACRO_SOURCE & source, int depth, const char * config, M
 			// for recursive metaknobs, we need to use a temp copy of the source info
 			// to avoid loosing the source id/offset info.
 			MACRO_SOURCE source2 = source;
-			int retval = read_meta_config(source2, depth+1, name, rhs, macro_set, subsys);
+			int retval = read_meta_config(source2, depth+1, name, rhs, macro_set, ctx);
 			if (retval < 0) {
 				return retval;
 			}
@@ -901,7 +970,7 @@ int Parse_config_string(MACRO_SOURCE & source, int depth, const char * config, M
 			// macro set with a "MY." prefix on their names.
 			//
 			std::string plusname = "MY."; plusname += (name+1);
-			insert(plusname.c_str(), (*name=='+') ? rhs : "", macro_set, source);
+			insert_macro(plusname.c_str(), (*name=='+') ? rhs : "", macro_set, source, ctx);
 
 		} else {
 
@@ -912,13 +981,12 @@ int Parse_config_string(MACRO_SOURCE & source, int depth, const char * config, M
 			}
 
 			/* expand self references only */
-			//PRAGMA_REMIND("TJ: this handles only trivial self-refs, needs rethink.")
-			char * value = expand_self_macro(rhs, macro_set, name, subsys);
+			char * value = expand_self_macro(rhs, name, macro_set, ctx);
 			if (value == NULL) {
 				return -1;
 			}
 
-			insert(name, value, macro_set, source);
+			insert_macro(name, value, macro_set, source, ctx);
 			FREE(value);
 		}
 
@@ -928,14 +996,197 @@ int Parse_config_string(MACRO_SOURCE & source, int depth, const char * config, M
 	return 0;
 }
 
+// fprintf an error if the above errors field is NULL, otherwise format an error and add it to the above errorstack
+// the preface is printed with fprintf but not with the errors stack.
+void MACRO_SET::push_error(FILE * fh, int code, const char* preface, const char* format, ... ) //CHECK_PRINTF_FORMAT(5,6);
+{
+	int cchPre = (this->errors || ! preface) ? 0 : strlen(preface)+1;
+
+	va_list ap;
+	va_start(ap, format);
+	int cch = vprintf_length(format, ap);
+	char * message = (char*)malloc(cchPre + cch + 1);
+	if (message) {
+		if (cchPre) {
+			strcpy(message, preface);
+			if (message[cchPre-1] == '\n') { --cchPre; }
+			else { message[cchPre-1] = ' '; }
+		}
+		vsprintf ( message + cchPre, format, ap );
+	}
+	va_end(ap);
+
+	if (this->errors) {
+		const char * subsys = (this->options & CONFIG_OPT_SUBMIT_SYNTAX) ? "Submit" : "Config";
+		this->errors->push(subsys, code, message);
+	} else {
+		if (message) {
+			fprintf(fh, "%s", message);
+		} else {
+			fprintf(fh, "ERROR %d", code);
+		}
+	}
+	if (message) {
+		free(message);
+	}
+}
+
+// used by the 'include into' config/submit command.
+FILE* Copy_macro_source_into (
+	MACRO_SOURCE& macro_source,
+	const char* source,
+	bool        source_is_command,
+	const char* dest,
+	MACRO_SET& macro_set,
+	int & exit_code,
+	std::string & errmsg);
+
+// parse keywords after 'include' and before ':' in config file
+// the expected input is:
+// [ifexist|ifexists][[output|command] [into <filename>]]
+//
+#define CONFIG_INCLUDE_OPTION_ISCOMMAND 0x02
+#define CONFIG_INCLUDE_OPTION_INTO      0x04
+#define CONFIG_INCLUDE_OPTION_IFEXISTS  0x10
+static bool parse_include_options(char * str, int & opts, char *& pinto, const char *& err)
+{
+	err = NULL;
+	pinto = NULL;
+	StringTokenIterator it(str, 100, " \t");
+	const std::string * tok = it.next_string();
+	if ( ! tok) return true;
+
+	if (*tok == "ifexist" || *tok == "ifexists") {
+		opts |= CONFIG_INCLUDE_OPTION_IFEXISTS;
+		tok = it.next_string();
+		if ( ! tok) return true;
+	}
+
+	if (*tok == "output" || *tok == "command") {
+		opts |= CONFIG_INCLUDE_OPTION_ISCOMMAND;
+		tok = it.next_string();
+		if ( ! tok) return true;
+		if (*tok == "into") {
+			int start, len;
+			start = it.next_token(len);
+			if (start < 0) {
+				err = "expected filename after keyword 'into'";
+				return false; // expected filename after keyword 'into'
+			}
+			opts |= CONFIG_INCLUDE_OPTION_INTO;
+			pinto = str + start;
+			tok = it.next_string();
+			str[start+len] = 0; // null terminate (but only after we advanced the iterator)
+			if ( ! tok) return true;
+		}
+	} else {
+		return false;
+	}
+	return true;
+}
+
+#ifdef USE_MACRO_STREAMS
+char * MacroStreamYourFile::getline(int gl_opt) {
+	return getline_implementation(fp, 128, gl_opt, src->line);
+}
+
+char * MacroStreamFile::getline(int gl_opt) {
+	return getline_implementation(fp, 128, gl_opt, src.line);
+}
+
+bool MacroStreamFile::open(const char * filename, bool is_command, MACRO_SET& set, std::string &errmsg) {
+	if (fp) fclose(fp);
+	fp = Open_macro_source (src, filename, is_command, set, errmsg);
+	return fp != NULL;
+}
+
+int MacroStreamFile::close(MACRO_SET&set, int parsing_return_val)
+{
+	return Close_macro_source(fp, src, set, parsing_return_val);
+}
+
+bool MacroStreamCharSource::open(const char * src_string, MACRO_SOURCE& _src)
+{
+	src = _src;
+	if (input) delete input;
+	input = new StringTokenIterator(src_string, 128, "\n");
+	return input != NULL;
+}
+
+int MacroStreamCharSource::close(MACRO_SET& /*set*/, int parsing_return_val)
+{
+	return parsing_return_val;
+}
+
+char * MacroStreamCharSource::getline(int /*gl_opt*/)
+{
+	if ( ! input) return NULL;
+	src.line += 1;
+	const std::string * line = input->next_string();
+	if ( ! line) return NULL;
+	// special entries that start with #opt:lineno are used to correct line numbers
+	// they were injected by load(), we don't actually return them to the caller.
+	if (starts_with(*line, "#opt:lineno:")) {
+		src.line = atoi(line->c_str()+12);
+		line = input->next_string();
+		if ( ! line) return NULL;
+	}
+	if ( ! line_buf || cbBufAlloc < (line->size()+1)) {
+		cbBufAlloc = line->size()+1;
+		line_buf.set((char*)malloc(cbBufAlloc));
+		if ( ! line_buf) return NULL;
+	}
+	strcpy(line_buf.ptr(), line->c_str());
+	return line_buf.ptr();
+}
+
+void MacroStreamCharSource::rewind()
+{
+	if (input) input->rewind();
+	src.line = 0;
+}
+
+int MacroStreamCharSource::load(FILE* fp, MACRO_SOURCE & FileSource, bool preserve_linenumbers /*=false*/)
+{
+	StringList lines;
+
+	if (preserve_linenumbers && (FileSource.line != 0)) {
+		// if we aren't starting at line zero, inject a comment indicating the starting line number
+		MyString buf; buf.formatstr("#opt:lineno:%d", FileSource.line);
+		lines.append(buf.c_str());
+	}
+	while (true) {
+		int lineno = FileSource.line;
+		char * line = getline_trim(fp, FileSource.line);
+		if ( ! line)
+			break;
+		lines.append(line);
+		if (preserve_linenumbers && (FileSource.line != lineno+1)) {
+			// if we read more than a single line, inject a comment indicating the new line number
+			MyString buf; buf.formatstr("#opt:lineno:%d", FileSource.line);
+			lines.append(buf.c_str());
+		}
+	}
+	file_string.set(lines.print_to_delimed_string("\n"));
+	open(file_string, FileSource);
+	rewind();
+	return lines.number();
+}
+
+#endif
+
 int
 Parse_macros(
+#ifdef USE_MACRO_STREAMS
+	MacroStream & ms,
+#else
 	FILE* conf_fp,
 	MACRO_SOURCE& FileSource,
+#endif
 	int depth, // a simple recursion detector
 	MACRO_SET& macro_set,
 	int options,
-	const char * subsys,
+	MACRO_EVAL_CONTEXT * pctx,
 	std::string& config_errmsg,
 	int (*fnSubmit)(void* pv, MACRO_SOURCE& source, MACRO_SET& set, char * line, std::string & errmsg),
 	void * pvSubmitData)
@@ -944,6 +1195,7 @@ Parse_macros(
 	char*	value = NULL;
 	char*	rhs = NULL;
 	char*	ptr = NULL;
+	char*	into_file = NULL; // holds <file> for "include command into <file> : <script>"
 	char	op, name_end_ch;
 	int		retval = 0;
 	bool	firstRead = true;
@@ -953,17 +1205,34 @@ Parse_macros(
 	bool gl_opt_smart = (macro_set.options & CONFIG_OPT_SMART_COM_IN_CONT) ? true : false;
 	int opt_meta_colon = (macro_set.options & CONFIG_OPT_COLON_IS_META_ONLY) ? 1 : 0;
 	ConfigIfStack ifstack;
+	StringList    hereList; // used to accumulate @= multiline values
+	MyString      hereName;
+	MyString      hereTag;
+	MACRO_EVAL_CONTEXT defctx; defctx.init(NULL);
+	if ( ! pctx) pctx = &defctx;
 
 	bool is_submit = (fnSubmit != NULL);
+#ifdef USE_MACRO_STREAMS
+	MACRO_SOURCE& FileSource = ms.source();
+#endif
 	const char * source_file = macro_source_filename(FileSource, macro_set);
 	const char * source_type = is_submit ? "Submit file" : "Config source";
 
 	while (true) {
+#ifdef USE_MACRO_STREAMS
+		name = ms.getline(gl_opt);
+#else
 		name = getline_implementation(conf_fp, 128, gl_opt, FileSource.line);
+#endif
 		// If the file is empty the first time through, warn the user.
 		if (name == NULL) {
 			if (firstRead) {
 				dprintf(D_FULLDEBUG, "WARNING: %s is empty: %s\n", source_type, source_file);
+			}
+			if ( ! hereName.empty()) {
+				const char * tag = hereTag.c_str();
+				macro_set.push_error(stderr, -1, source_type, "Found end-of-file while scanning for '@%s' in %s\n", tag ? tag : "", source_file);
+				retval = -1;
 			}
 			break;
 		}
@@ -983,6 +1252,31 @@ Parse_macros(
 			continue;
 		}
 
+		// if we are processing a here @= knob, just accumulate lines until we see the closing @
+		// when we see the closing @, expand the value and stuff it into the given name.
+		if ( ! hereName.empty()) {
+			if (name[0] == '@' && hereTag == name+1) {
+				/* expand self references only */
+				rhs = hereList.print_to_delimed_string("\n");
+				value = expand_self_macro(rhs, hereName.c_str(), macro_set, *pctx);
+				if( value == NULL ) {
+					retval = -1;
+					name = NULL;
+					goto cleanup;
+				}
+				insert_macro(hereName.c_str(), value, macro_set, FileSource, *pctx);
+
+				FREE(rhs); rhs = NULL;
+				FREE(value); value = NULL;
+				hereName.clear();
+				hereTag.clear();
+				hereList.clearAll();
+				continue;
+			}
+			hereList.append(name);
+			continue;
+		}
+
 		// to allow if/else constructs to be used in files that are parsed by pre 8.1.5 HTCondor
 		// we ignore a ':' at the beginning of the line of an if body.
 		// before 8.1.5, a line that began with ':' would be effectively ignored*.
@@ -998,11 +1292,12 @@ Parse_macros(
 
 		// if the line is an if/elif/else/endif handle it here, updating the ifstack as needed.
 		std::string errmsg;
-		if (ifstack.line_is_if(name, errmsg, macro_set, subsys)) {
+		if (ifstack.line_is_if(name, errmsg, macro_set, *pctx)) {
 			if ( ! errmsg.empty()) {
 				dprintf(D_CONFIG | D_FAILURE, "Parse_config if error: '%s' line: %s\n", errmsg.c_str(), name);
 				config_errmsg = errmsg;
 				retval = -1;
+				name = NULL;
 				goto cleanup;
 			} else {
 				dprintf(D_CONFIG | D_VERBOSE, "config %s:%lld,%lld,%lld line: %s\n", name, ifstack.top, ifstack.state, ifstack.estate, name);
@@ -1036,8 +1331,10 @@ Parse_macros(
 			if (is_submit) {
 				// a line with no operator may be a QUEUE statement, so hand it off to the queue callback.
 				retval = fnSubmit(pvSubmitData, FileSource, macro_set, name, config_errmsg);
-				if (retval != 0)
+				if (retval != 0) {
+					name = NULL; // prevent cleanup from freeing name since it's owned by getline_implementation
 					goto cleanup;
+				}
 				continue;
 			} else if ( name && name[0] == '[' ) {
 				// Treat a line w/o an operator that begins w/ a square bracket
@@ -1047,52 +1344,42 @@ Parse_macros(
 			} else {
 				// No operator and no square bracket... bail.
 				retval = -1;
+				name = NULL;
 				goto cleanup;
 			}
 		}
 
-#if 1 // SUBMIT_USING_CONFIG_PARSER
+		char * word_before_op = NULL;
 		char * pop = ptr; // keep track of where we see the operator
 		op = *pop;
 		char * name_end = ptr; // keep track of where we null-terminate the name, so we can reverse it later
 		name_end_ch = *name_end;
 		if (*ptr) { *ptr++ = '\0'; }
-		// scan for an operator character if we don't have one already.
+		// scan for an operator character if we don't have one already. operator can be : = or @=
 		if ( ! ISOP(op)) {
-			while ( *ptr && ! ISOP(*ptr) ) {
+			while (isspace(*ptr)) ++ptr;
+			if (*ptr && ! ISOP(*ptr) && ! (*ptr == '@')) word_before_op = ptr;
+			while ( *ptr && ! ISOP(*ptr) && ! (*ptr == '@')) {
 				++ptr;
 			}
 			pop = ptr;
 			op = *ptr;
-			if (op) ++ptr;
+			if (op) {
+				++ptr;
+				if (op == '@') {
+					// the @ op must be followed by an = to be valid.
+					if (*ptr == '=') ++ptr;
+					else op = 0;
+				}
+			}
 		}
 		// if we still haven't got an operator, then this isn't a valid config line,
 		// (it *might* be a valid submit line however.)
-		if ( ! ISOP(op) && ! is_submit) {
+		if ( ! ISOP(op) && op != '@' && ! is_submit) {
 			retval = -1;
+			name = NULL;
 			goto cleanup;
 		}
-#else
-		char * pop = ptr; // keep track of where we see the operator
-		if( ISOP(*ptr) ) {
-			op = *ptr;
-			//op is now '=' in the above eg
-			*ptr++ = '\0';
-			// name is now 'OpSys' in the above eg
-		} else {
-			*ptr++ = '\0';
-			while( *ptr && !ISOP(*ptr) ) {
-				ptr++;
-			}
-			if( !*ptr  && ! is_submit) {
-				// Here we have determined the line has no operator at all
-				retval = -1;
-				goto cleanup;
-			}
-			pop = ptr;
-			op = *ptr++;
-		}
-#endif
 
 		/* Skip to next non-space character */
 		while( *ptr && isspace(*ptr) ) {
@@ -1108,6 +1395,8 @@ Parse_macros(
 		bool has_at = (*name == '@');
 		int is_include = (op == ':' && MATCH == strcasecmp(name + has_at, "include"));
 		bool is_meta = (op == ':' && MATCH == strcasecmp(name + has_at, "use"));
+		int is_error_keyword = (op == ':' && MATCH == strcasecmp(name + has_at, "error"));
+		int is_warn_keyword = (op == ':' && MATCH == strcasecmp(name + has_at, "warning"));
 
 		// if the name is 'use' then this is a metaknob, so the actual name
 		// is the word after 'use'. so we want to find that word and
@@ -1122,9 +1411,30 @@ Parse_macros(
 			} else {
 				name += has_at+3; // this will point at the null terminator of 'use'
 			}
+		} else if (is_error_keyword || is_warn_keyword) {
+			int code = 0;
+			if (is_error_keyword) {
+				// set name to point to the word after error, it will be an optional error code
+				if (name+has_at+5 < pop) {
+					char * pn = name + has_at+5;
+					while (isspace(*pn) && pn < pop) { ++pn; }
+					code = atoi(pn);
+				}
+				if ( ! code) code = -1;
+			}
+			auto_free_ptr msg(expand_macro(rhs, macro_set, *pctx));
+			macro_set.push_error(stderr, code, source_type,
+					"%s \"%s\", Line %d: %s\n",
+					is_error_keyword ? "Error" : "Warning",
+					source_file, FileSource.line, msg ? msg.ptr() : "");
+			if (code) {
+				retval = code;
+				name = NULL;
+				goto cleanup;
+			}
 		} else if (is_include) {
 			// check for keywords after "include" and before the :
-			// these keywords will modifity the behavior of include
+			// these keywords will modify the behavior of include
 			if (name+has_at+8 < pop) {
 				name += has_at+8;
 				while (isspace(*name)) ++name; // skip whitespace
@@ -1132,19 +1442,32 @@ Parse_macros(
 				char * p = pop-1;
 				while (isspace(*p) && p > name) { *p-- = 0; }
 				if (*name) {
-					if (MATCH == strcasecmp(name, "output")) is_include = 2; // a value of 2 indicates a command rather than a filename.
-					else if (MATCH == strcasecmp(name, "command")) is_include = 2; // a value of 2 indicates a command rather than a filename.
-					else {
-						config_errmsg = "unexpected keyword '";
-						config_errmsg += name;
-						config_errmsg += "' after include";
-						return -1;
+					int include_opts = 0;
+					const char * err = NULL;
+					if (parse_include_options(name, include_opts, into_file, err)) {
+						is_include |= include_opts;
+					} else {
+						macro_set.push_error(stderr, -1, source_type,
+							"Error \"%s\", Line %d: unexpected keyword(s) '%s' after include %s\n",
+							source_file, FileSource.line, name, err ? err : "");
+						retval = -1;
+						name = NULL;
+						goto cleanup;
 					}
 				}
 			}
 			// set name to be the filename or command line.
 			name = pop+1;
 			while (isspace(*name)) ++name; // skip whitespace before the filename
+		} else if (is_submit && word_before_op) {
+			// extra words before the operator may be a QUEUE statement, so hand it off to the queue callback.
+			*name_end = name_end_ch;
+			retval = fnSubmit(pvSubmitData, FileSource, macro_set, name, config_errmsg);
+			if (retval != 0) {
+				name = NULL; // prevent cleanup from freeing name since it's owned by getline_implementation
+				goto cleanup;
+			}
+			continue;
 		} else if (op == ':' && ! is_submit) {
 		#ifdef WARN_COLON_FOR_PARAM_ASSIGN
 			if (opt_meta_colon < 2) { op = '='; } // change the op to = so that we don't "goto cleanup" below
@@ -1154,8 +1477,9 @@ Parse_macros(
 			if (MATCH == strcasecmp(name, "RunBenchmarks")) { op = '='; if (opt_meta_colon < 2) opt_meta_colon = 0; }
 
 			if (opt_meta_colon) {
-				fprintf( stderr, "%s %s \"%s\", Line %d: obsolete use of ':' for parameter assignment at %s : %s\n",
-						source_type, op == ':' ? "Error" : "Warning",
+				macro_set.push_error( stderr, -1, source_type,
+						"%s \"%s\", Line %d: obsolete use of ':' for parameter assignment at %s : %s\n",
+						op == ':' ? "Error" : "Warning",
 						source_file, FileSource.line,
 						name, rhs
 						);
@@ -1169,9 +1493,9 @@ Parse_macros(
 
 		// Expand references to other parameters in the macro name.
 		// this returns a strdup'd string even if there are no macros to expand.
-		bool use_default_param_table = (macro_set.options & CONFIG_OPT_DEFAULTS_ARE_PARAM_INFO) != 0;
+		// bool use_default_param_table = (macro_set.options & CONFIG_OPT_DEFAULTS_ARE_PARAM_INFO) != 0;
 		char * line = name; // in case we need to get back to pre-expanded state (for submit)
-		name = expand_macro(name, macro_set, use_default_param_table, subsys);
+		name = expand_macro(name, macro_set, *pctx);
 		if( name == NULL ) {
 			retval = -1;
 			goto cleanup;
@@ -1183,30 +1507,74 @@ Parse_macros(
 		// if this is a metaknob
 		if (is_meta) {
 			//FileSource.line = ConfigLineNo;
-			retval = read_meta_config(FileSource, depth+1, name, rhs, macro_set, subsys);
+			retval = read_meta_config(FileSource, depth+1, name, rhs, macro_set, *pctx);
 			if (retval < 0) {
-				fprintf( stderr,
-							"%s Error \"%s\", Line %d: at use %s:%s\n",
-							source_type, source_file, FileSource.line, name, rhs );
+				macro_set.push_error( stderr, retval, source_type,
+							"Error \"%s\", Line %d: at use %s:%s\n",
+							source_file, FileSource.line, name, rhs );
 				goto cleanup;
 			}
 		} else if (is_include) {
 			MACRO_SOURCE InnerSource;
-			FILE* fp = Open_macro_source(InnerSource, name, (is_include > 1), macro_set, config_errmsg);
-			if ( ! fp) { retval = -1; }
-			else {
+			FILE* fp = NULL;
+			bool is_into    = 0 != (is_include & CONFIG_INCLUDE_OPTION_INTO);
+			bool is_command = 0 != (is_include & CONFIG_INCLUDE_OPTION_ISCOMMAND);
+			bool must_exist = 0 == (is_include & CONFIG_INCLUDE_OPTION_IFEXISTS);
+			const char * filename = name;
+			auto_free_ptr cached_filename;
+
+			if (is_into && into_file) {
+				if (is_valid_command(into_file)) {
+					macro_set.push_error( stderr, retval, source_type,
+								"Error \"%s\", Line %d, destination for 'include into' may not be a script\n",
+								source_file, FileSource.line);
+					retval = -1;
+					goto cleanup;
+				} else {
+					is_command = false;
+					cached_filename.set(expand_macro(into_file, macro_set, *pctx));
+					filename = cached_filename.ptr();
+					if ( ! filename || ! filename[0]) {
+						macro_set.push_error( stderr, retval, source_type,
+									"Error \"%s\", Line %d, destination for 'include into' expanded to ''\n",
+									source_file, FileSource.line);
+						retval = -1;
+						goto cleanup;
+					}
+				}
+			}
+
+			fp = Open_macro_source(InnerSource, filename, is_command, macro_set, config_errmsg);
+			if ( ! fp && is_into) {
+				std::string msg;
+				//must_exist = 0 == (is_include & CONFIG_INCLUDE_OPTION_IFEXISTS);
+				is_command = 0 != (is_include & CONFIG_INCLUDE_OPTION_ISCOMMAND);
+				int exit_code = 0;
+				fp = Copy_macro_source_into(InnerSource, name, is_command, filename, macro_set, exit_code, msg);
+				if (must_exist) {
+					if ( ! fp) config_errmsg = msg;
+				}
+			}
+			if ( ! fp) {
+				if (must_exist) retval = -1;
+			} else {
 				if (depth+1 >= CONFIG_MAX_NESTING_DEPTH) {
 					config_errmsg = "includes nested too deep";
 					retval = -2; // indicate that nesting depth has been exceeded.
 				} else {
 					if ( ! is_submit) local_config_sources.append(macro_source_filename(InnerSource, macro_set));
-					retval = Parse_macros(fp, InnerSource, depth+1, macro_set, options, subsys, config_errmsg, fnSubmit, pvSubmitData);
+#ifdef USE_MACRO_STREAMS
+					MacroStreamYourFile msInner(fp, InnerSource);
+					retval = Parse_macros(msInner, depth+1, macro_set, options, pctx, config_errmsg, fnSubmit, pvSubmitData);
+#else
+					retval = Parse_macros(fp, InnerSource, depth+1, macro_set, options, pctx, config_errmsg, fnSubmit, pvSubmitData);
+#endif
 				}
 			}
 			if (retval < 0) {
-				fprintf( stderr,
-							"%s Error \"%s\", Line %d, Include Depth %d: %s\n",
-							source_type, name, InnerSource.line, depth+1, config_errmsg.c_str());
+				macro_set.push_error( stderr, retval, source_type,
+							"Error \"%s\", Line %d, Include Depth %d: %s\n",
+							name, InnerSource.line, depth+1, config_errmsg.c_str());
 				config_errmsg.clear();
 				goto cleanup;
 			}
@@ -1217,36 +1585,50 @@ Parse_macros(
 			// macro set with a "MY." prefix on their names.
 			//
 			std::string plusname = "MY."; plusname += name+1;
-			insert(plusname.c_str(), (*name=='+') ? rhs : "", macro_set, FileSource);
+			insert_macro(plusname.c_str(), (*name=='+') ? rhs : "", macro_set, FileSource, *pctx);
 
-		} else if (is_submit && (op != '=' || MATCH == strcasecmp(name, "queue"))) {
+		} else if (is_submit && ((op != '=' && op != '@') || MATCH == strcasecmp(name, "queue"))) {
 
 			retval = fnSubmit(pvSubmitData, FileSource, macro_set, line, config_errmsg);
-			if (retval != 0) // this may or may not be a failure, but we should stop reading the file.
+			if (retval != 0) { // this may or may not be a failure, but we should stop reading the file.
+				if (retval == -1) {
+					if (config_errmsg.empty()) config_errmsg = "invalid queue statement.";
+					macro_set.push_error(stderr, retval, source_type,
+						"Error \"%s\", Line %d: cannot parse: %s\n", source_file, FileSource.line,
+						line);
+				}
 				goto cleanup;
+			}
 
 		} else {
 
 			/* Check that "name" is a legal identifier : only
 			   alphanumeric characters and _ allowed*/
 			if( !is_valid_param_name(name) ) {
-				fprintf( stderr,
-						 "%s Error \"%s\", Line %d: Illegal Identifier: <%s>\n",
-						 source_type, source_file, FileSource.line, (name?name:"(null)") );
+				macro_set.push_error( stderr, -1, source_type,
+						 "Error \"%s\", Line %d: Illegal Identifier: <%s>\n",
+						 source_file, FileSource.line, (name?name:"(null)") );
 				retval = -1;
 				goto cleanup;
 			}
 
+			if (op == '@') {
+				hereName = name;
+				hereTag = rhs;
+				hereList.clearAll();
+				FREE(name); name = NULL;
+				continue;
+			}
+
 			if (options & READ_MACROS_EXPAND_IMMEDIATE) {
-				value = expand_macro(rhs, macro_set);
+				value = expand_macro(rhs, macro_set, *pctx);
 				if( value == NULL ) {
 					retval = -1;
 					goto cleanup;
 				}
 			} else  {
 				/* expand self references only */
-				//PRAGMA_REMIND("TJ: this handles only trivial self-refs, needs rethink.")
-				value = expand_self_macro(rhs, macro_set, name, subsys);
+				value = expand_self_macro(rhs, name, macro_set, *pctx);
 				if( value == NULL ) {
 					retval = -1;
 					goto cleanup;
@@ -1260,11 +1642,11 @@ Parse_macros(
 					  table.  Everything now behaves like macros used to
 					  Derek Wright <wright@cs.wisc.edu> 4/11/00
 					*/
-				insert(name, value, macro_set, FileSource);
+				insert_macro(name, value, macro_set, FileSource, *pctx);
 			} else {
-				fprintf( stderr,
-					"%s Error \"%s\", Line %d: Syntax Error, missing : or =\n",
-					source_type, source_file, FileSource.line );
+				macro_set.push_error( stderr, -1, source_type,
+					"Error \"%s\", Line %d: Syntax Error, missing : or =\n",
+					source_file, FileSource.line );
 				retval = -1;
 				goto cleanup;
 			}
@@ -1277,9 +1659,8 @@ Parse_macros(
 	}
 
 	if (ifstack.inside_if()) {
-		fprintf(stderr,
-				"%s Error \"%s\", Line %d: \n",
-				source_type, source_file, FileSource.line );
+		macro_set.push_error(stderr, -1, source_type,
+				"Error \"%s\", Line %d: \n", source_file, FileSource.line );
 		config_errmsg = "endif(s) not found before end-of-file";
 		retval = -1;
 		goto cleanup;
@@ -1291,18 +1672,18 @@ Parse_macros(
 	return retval;
 }
 
-#if 1
-FILE* Open_macro_source (
-	MACRO_SOURCE& macro_source,
-	const char* source,
-	bool        source_is_command,
-	MACRO_SET& macro_set,
-	std::string & config_errmsg)
+// parse the source input and decide if it is a | command, if so
+// strip the trailing |
+// return value is source to display (i.e. to add to sources list)
+// on exit cmd will point to the command to execute (withou trailing |) if is_command is true on exit
+//
+static const char * fixup_pipe_source (
+	const char * source, // in: the raw source
+	bool & is_command,   // in/out: true on input if the input is a command regardless of trailing |, true only output IFF the source is a command
+	const char * &cmd,   // out: the command to execute (set only if is_command is true)
+	std::string & cmdbuf) // out: temporary buffer, return value may point to this.
 {
-	FILE*	fp = NULL;
-	std::string cmdbuf; // in case we have to produce a modified command
-	const char * cmd = NULL;
-
+	bool source_is_command = is_command;
 	bool is_pipe_cmd = is_piped_command(source);
 	if (source_is_command && ! is_pipe_cmd) {
 		is_pipe_cmd = true;
@@ -1317,6 +1698,40 @@ FILE* Open_macro_source (
 		}
 		cmd = cmdbuf.c_str();
 	}
+	is_command = is_pipe_cmd;
+	return source;
+}
+
+FILE* Open_macro_source (
+	MACRO_SOURCE& macro_source,
+	const char* source,
+	bool        source_is_command,
+	MACRO_SET& macro_set,
+	std::string & config_errmsg)
+{
+	FILE*	fp = NULL;
+	std::string cmdbuf; // in case we have to produce a modified command
+	const char * cmd = NULL;
+
+#if 1
+	bool is_pipe_cmd = source_is_command;
+	source = fixup_pipe_source(source, is_pipe_cmd, cmd, cmdbuf);
+#else
+	bool is_pipe_cmd = is_piped_command(source);
+	if (source_is_command && ! is_pipe_cmd) {
+		is_pipe_cmd = true;
+		cmd = source; // the input source is actually the command (without trailing |)
+		cmdbuf = source; cmdbuf += " |";
+		source = cmdbuf.c_str();
+	} else if (is_pipe_cmd) {
+		cmdbuf = source; // the input source is the command with trailing |
+		// remove trailing | and spaces
+		for (int ix = (int)cmdbuf.length()-1; ix > 0 && (cmdbuf[ix] == '|' || cmdbuf[ix] == ' '); --ix) {
+			cmdbuf[ix] = 0;
+		}
+		cmd = cmdbuf.c_str();
+	}
+#endif
 
 	// initialize a MACRO_SOURCE for this file
 	insert_source(source, macro_set, macro_source);
@@ -1358,9 +1773,9 @@ int Close_macro_source(FILE* conf_fp, MACRO_SOURCE& source, MACRO_SET& macro_set
 		if (source.is_command) {
 			int exit_code = my_pclose(conf_fp);
 			if (0 == parsing_return_val && exit_code != 0) {
-				fprintf( stderr, "Configuration Error \"%s\": "
-						 "command terminated with exit code %d\n",
-						 macro_source_filename(source, macro_set), exit_code );
+				macro_set.push_error( stderr, -1, NULL,
+					"Error \"%s\": command terminated with exit code %d\n",
+					macro_source_filename(source, macro_set), exit_code );
 				return -1;
 			}
 		} else {
@@ -1370,509 +1785,129 @@ int Close_macro_source(FILE* conf_fp, MACRO_SOURCE& source, MACRO_SET& macro_set
 	return parsing_return_val;
 }
 
-#else
-
-#if 1
-
-int
-Read_macros (
-	const char* config_source,
-	int depth, // a simple recursion detector
+FILE* Copy_macro_source_into (
+	MACRO_SOURCE& macro_source,
+	const char* source,
+	bool        source_is_command,
+	const char* dest,
 	MACRO_SET& macro_set,
-	int options,
-	const char * subsys,
-	std::string & config_errmsg,
-	int (*fnQueue)(void* pv, MACRO_SOURCE& source, MACRO_SET& set, const char * line, std::string & errmsg),
-	void * pvQueueData)
+	int & exit_code,
+	std::string & errmsg)
 {
-	FILE*	conf_fp = NULL;
-	bool check_runtime_security = (options & READ_MACROS_CHECK_RUNTIME_SECURITY) != 0;
-#else
-int
-Read_config(const char* config_source,
-			int depth, // a simple recursion detector
-			MACRO_SET& macro_set,
-			int expand_flag,
-			bool check_runtime_security,
-			const char * subsys,
-			std::string & config_errmsg)
-{
-	FILE*	conf_fp = NULL;
-	char*	name = NULL;
-	char*	value = NULL;
-	char*	rhs = NULL;
-	char*	ptr = NULL;
-	char	op;
-	bool	firstRead = true;
-	const int gl_opt_old = 0;
-	const int gl_opt_new = CONFIG_GETLINE_OPT_COMMENT_DOESNT_CONTINUE | CONFIG_GETLINE_OPT_CONTINUE_MAY_BE_COMMENTED_OUT;
-	int gl_opt = (macro_set.options & CONFIG_OPT_OLD_COM_IN_CONT) ? gl_opt_old : gl_opt_new;
-	bool gl_opt_smart = (macro_set.options & CONFIG_OPT_SMART_COM_IN_CONT) ? true : false;
-	int opt_meta_colon = (macro_set.options & CONFIG_OPT_COLON_IS_META_ONLY) ? 1 : 0;
-	ConfigIfStack ifstack;
-#endif
-	int		retval = 0;
-	bool	is_pipe_cmd = false;
+	FILE*	fp = NULL;
+	std::string cmdbuf; // in case we have to produce a modified command
+	const char * cmd = NULL; // holds command to execute extracted from source
+	exit_code = 0;
 
-	if (subsys && ! *subsys) subsys = NULL;
-
-	ConfigLineNo = 0;
-	config_errmsg.clear();
-
-	// initialize a MACRO_SOURCE for this file that we will use
-	// in subsequent macro insert calls.
-	MACRO_SOURCE FileMacro;
-	insert_source(config_source, macro_set, FileMacro);
-
-	// check for exceeded nesting depth.
-	if (depth >= CONFIG_MAX_NESTING_DEPTH) {
-		config_errmsg = "includes nested too deep";
-		return -2; // indicate that nesting depth has been exceeded.
-	}
-
-	// Determine if the config file name specifies a file to open, or a
-	// pipe to suck on. Process each accordingly
-	if ( is_piped_command(config_source) ) {
-		is_pipe_cmd = true;
-		if ( is_valid_command(config_source) ) {
-			// try to run the cmd specified before the '|' symbol, and
-			// get the configuration from it's output.
-			char *cmdToExecute = strdup( config_source );
-			cmdToExecute[strlen(cmdToExecute)-1] = '\0';
-
-			ArgList argList;
-			MyString args_errors;
-			if(!argList.AppendArgsV1RawOrV2Quoted(cmdToExecute, &args_errors)) {
-				formatstr(config_errmsg, "Can't append args, %s", args_errors.Value());
-				free( cmdToExecute );
-				return -1;
-			}
-			conf_fp = my_popen(argList, "r", FALSE);
-			if( conf_fp == NULL ) {
-				config_errmsg = "not a valid command";
-				free( cmdToExecute );
-				return -1;
-			}
-			free( cmdToExecute );
-		} else {
-			config_errmsg = "not a valid command, | must be at the end\n";
-			return  -1;
+	source = fixup_pipe_source(source, source_is_command, cmd, cmdbuf);
+	if (source_is_command) {
+		ArgList argList;
+		MyString args_errors;
+		if(!argList.AppendArgsV1RawOrV2Quoted(cmd, &args_errors)) {
+			formatstr(errmsg, "Can't append args, %s", args_errors.Value());
+			return NULL;
+		}
+		fp = my_popen(argList, "rb", FALSE);
+		if ( ! fp) {
+			errmsg = "not a valid command";
+			return NULL;
 		}
 	} else {
-		is_pipe_cmd = false;
-		conf_fp = safe_fopen_wrapper_follow(config_source, "r");
-		if( conf_fp == NULL ) {
-			config_errmsg = "can't open file";
-			return  -1;
+		fp = safe_fopen_wrapper_follow(source, "rb");
+		if ( ! fp) {
+			errmsg = "can't open input file";
+			return NULL;
 		}
 	}
 
-	if( check_runtime_security ) {
-#ifndef WIN32
-			// unfortunately, none of this works on windoze... (yet)
-		if ( is_pipe_cmd ) {
-			fprintf( stderr, "Configuration Error File <%s>: runtime config "
-					 "not allowed to come from a pipe command\n",
-					 config_source );
-			retval = -1;
-			goto cleanup;
-		}
-		int fd = fileno(conf_fp);
-		struct stat statbuf;
-		uid_t f_uid;
-		int rval = fstat( fd, &statbuf );
-		if( rval < 0 ) {
-			fprintf( stderr, "Configuration Error File <%s>, fstat() failed: %s (errno: %d)\n",
-					 config_source, strerror(errno), errno );
-			retval = -1;
-			goto cleanup;
-		}
-		f_uid = statbuf.st_uid;
-		if( can_switch_ids() ) {
-				// if we can switch, the file *must* be owned by root
-			if( f_uid != 0 ) {
-				fprintf( stderr, "Configuration Error File <%s>, "
-						 "running as root yet runtime config file owned "
-						 "by uid %d, not 0!\n", config_source, (int)f_uid );
-				retval = -1;
-				goto cleanup;
-			}
+	FILE * fpo = safe_fopen_wrapper_follow(dest, "wb", 0644);
+	if ( ! fpo) {
+		if (source_is_command) {
+			my_pclose(fp);
 		} else {
-				// if we can't switch, at least ensure we own the file
-			if( f_uid != get_my_uid() ) {
-				fprintf( stderr, "Configuration Error File <%s>, "
-						 "running as uid %d yet runtime config file owned "
-						 "by uid %d!\n", config_source, (int)get_my_uid(),
-						 (int)f_uid );
-				retval = -1;
-				goto cleanup;
-			}
+			fclose(fp);
 		}
-#endif /* ! WIN32 */
-	} // if( check_runtime_security )
+		errmsg = "can't open '";
+		errmsg += dest;
+		errmsg += "' for write";
+		return NULL;
+	}
 
-#if 1
-	retval = Parse_macros(conf_fp, FileMacro, depth, macro_set, options, subsys, config_errmsg, fnQueue, pvQueueData);
- cleanup:
-#else
-	while(true) {
-		name = getline_implementation(conf_fp, 128, gl_opt);
-		// If the file is empty the first time through, warn the user.
-		if (name == NULL) {
-			if (firstRead) {
-				dprintf(D_FULLDEBUG, "WARNING: Config source is empty: %s\n",
-						config_source);
-			}
+	int readerr = 0, writerr = 0;
+	const int bufsiz = 1024*16;
+	auto_free_ptr buf((char*)malloc(bufsiz));
+	for(;;) {
+		int cb = fread(buf.ptr(), 1, bufsiz, fp);
+		if (cb == 0) {
+			if ( ! feof(fp)) readerr = ferror(fp);
 			break;
 		}
-		firstRead = false;
-		
-		/* Skip over comments */
-		if( *name == '#' || blankline(name) ) {
-			if (gl_opt_smart) {
-				if (MATCH == strcasecmp(name, "#opt:oldcomment")) {
-					gl_opt = gl_opt_old;
-				} else if (MATCH == strcasecmp(name, "#opt:newcomment")) {
-					gl_opt = gl_opt_new;
-				} else if (MATCH == strcasecmp(name, "#opt:strict")) {
-					opt_meta_colon = 2;
-				}
-			}
-			continue;
+		if ( ! fwrite(buf.ptr(), cb, 1, fpo)) {
+			writerr = ferror(fpo);
+			break;
 		}
+	}
 
-		// to allow if/else constructs to be used in files that are parsed by pre 8.1.5 HTCondor
-		// we ignore a ':' at the beginning of the line of an if body.
-		// before 8.1.5, a line that began with ':' would be effectively ignored*.
-		// now we ignore the ':' but not the rest of the line, so a ':' can be used to make lines
-		// invisible to the old config parser, but not the current one.  To help avoid regression
-		// we only ignore ':' at the start of lines that constitute an if body
-		if (*name == ':') {
-			if (ifstack.inside_if()
-				|| (name[1] == 'i' && name[2] == 'f' && (isspace(name[3]) || !name[3]))) {
-				++name;
-			}
-		}
+	if (source_is_command) {
+		exit_code = my_pclose(fp);
+	} else {
+		fclose(fp);
+	}
+	fp = NULL;
+	fclose(fpo); fpo = NULL;
 
-		// if the line is an if/elif/else/endif handle it here, updating the ifstack as needed.
-		std::string errmsg;
-		if (ifstack.line_is_if(name, errmsg, macro_set, subsys)) {
-			if ( ! errmsg.empty()) {
-				dprintf(D_CONFIG | D_FAILURE, "Parse_config if error: '%s' line: %s\n", errmsg.c_str(), name);
-				config_errmsg = errmsg;
-				retval = -1;
-				goto cleanup;
-			} else {
-				dprintf(D_CONFIG | D_VERBOSE, "config %s:%lld,%lld,%lld line: %s\n", name, ifstack.top, ifstack.state, ifstack.estate, name);
-			}
-			continue;
-		}
-		// if the line is inside the body of an if/elif/else that is false, ignore it.
-		if ( ! ifstack.enabled()) {
-			dprintf(D_CONFIG | D_VERBOSE, "config if(%lld,%lld,%lld) ignoring: %s\n", ifstack.top, ifstack.state, ifstack.estate, name);
-			continue;
-		}
-
-		op = 0;
-		ptr = name;
-
-		// Assumption is that the line starts with a non whitespace
-		// character
-		// Example :
-		// OP_SYS=SunOS
-		while( *ptr ) {
-			if( isspace(*ptr) || ISOP(*ptr) ) {
-			  /* *ptr is now whitespace or '=' or ':' */
-			  break;
-			} else {
-			  ptr++;
-			}
-		}
-
-		if( !*ptr ) {
-				// Here we have determined this line has no operator
-			if ( name && name[0] == '[' ) {
-				// Treat a line w/o an operator that begins w/ a square bracket
-				// as a comment so a config file can look like
-				// a Win32 .ini file for MS Installer purposes.		
-				continue;
-			} else {
-				// No operator and no square bracket... bail.
-				retval = -1;
-				goto cleanup;
-			}
-		}
-
-		char * pop = ptr; // keep track of where we see the operator
-		if( ISOP(*ptr) ) {
-			op = *ptr;
-			//op is now '=' in the above eg
-			*ptr++ = '\0';
-			// name is now 'OpSys' in the above eg
+	if (exit_code || readerr || writerr) {
+		unlink(dest);
+		if (readerr) {
+			formatstr(errmsg, "read error %d or write error %d during copy", readerr, writerr);
 		} else {
-			*ptr++ = '\0';
-			while( *ptr && !ISOP(*ptr) ) {
-				ptr++;
-			}
-			if( !*ptr ) {
-				retval = -1;
-				goto cleanup;
-			}
-			pop = ptr;
-			op = *ptr++;
+			formatstr(errmsg, "exited with error %d", exit_code);
 		}
-
-		/* Skip to next non-space character */
-		while( *ptr && isspace(*ptr) ) {
-			ptr++;
-		}
-
-		rhs = ptr;
-		// rhs is now 'SunOS' in the above eg
-
-		// in order to prevent "use" and "include" from looking like valid config in 8.0 and earlier
-		// they can optionally be preceeded with an @ that doesn't change the  meaning, but will
-		// generate a syntax error in 8.0 and earlier.
-		bool has_at = (*name == '@');
-		int is_include = (op == ':' && MATCH == strcasecmp(name + has_at, "include"));
-		bool is_meta = (op == ':' && MATCH == strcasecmp(name + has_at, "use"));
-
-		// if the name is 'use' then this is a metaknob, so the actual name
-		// is the word after 'use'. so we want to find that word and
-		// remove trailing spaces from it.
-		if (is_meta) {
-			// set name to point to the word after use (if there is one)
-			if (name+has_at+4 < pop) {
-				name += has_at+4;
-				while (isspace(*name) && name < pop) { ++name; }
-				char * p = pop-1;
-				while (isspace(*p) && p > name) { *p-- = 0; }
-			} else {
-				name += has_at+3; // this will point at the null terminator of 'use'
-			}
-		} else if (is_include) {
-			// check for keywords after "include" and before the :
-			// these keywords will modifity the behavior of include
-			if (name+has_at+8 < pop) {
-				name += has_at+8;
-				while (isspace(*name)) ++name; // skip whitespace
-				*pop = 0; // guarantee null term for include keyword.
-				char * p = pop-1;
-				while (isspace(*p) && p > name) { *p-- = 0; }
-				if (*name) {
-					if (MATCH == strcasecmp(name, "output")) is_include = 2; // a value of 2 indicates a command rather than a filename.
-					else if (MATCH == strcasecmp(name, "command")) is_include = 2; // a value of 2 indicates a command rather than a filename.
-					else {
-						config_errmsg = "unexpected keyword '";
-						config_errmsg += name;
-						config_errmsg += "' after include";
-						return -1;
-					}
-				}
-			}
-			// set name to be the filename or command line.
-			name = pop+1;
-			while (isspace(*name)) ++name; // skip whitespace before the filename
-		} else if (op == ':') {
-		#ifdef WARN_COLON_FOR_PARAM_ASSIGN
-			if (opt_meta_colon < 2) { op = '='; } // change the op to = so that we don't "goto cleanup" below
-
-			// backward compat hack. the old config file used : syntax for RunBenchmarks,
-			// so grandfather this in. tread error as warning, tread warning as ignore.
-			if (MATCH == strcasecmp(name, "RunBenchmarks")) { op = '='; if (opt_meta_colon < 2) opt_meta_colon = 0; }
-
-			if (opt_meta_colon) {
-				fprintf( stderr, "Configuration %s \"%s\", Line %d: obsolete use of ':' for parameter assignment at %s : %s\n",
-						op == ':' ? "Error" : "Warning",
-						config_source, ConfigLineNo,
-						name, rhs
-						);
-				if (op == ':') {
-					retval = -1;
-					goto cleanup;
-				}
-			}
-		#endif // def WARN_COLON_FOR_PARAM_ASSIGN
-		}
-
-		/* Expand references to other parameters */
-		bool use_default_param_table = (macro_set.options & CONFIG_OPT_DEFAULTS_ARE_PARAM_INFO) != 0;
-		name = expand_macro(name, macro_set, use_default_param_table, subsys);
-		if( name == NULL ) {
-			retval = -1;
-			goto cleanup;
-		}
-
-		// if this is a metaknob
-		if (is_meta) {
-			FileMacro.line = ConfigLineNo;
-			retval = read_meta_config(FileMacro, depth+1, name, rhs, macro_set, subsys);
-			if (retval < 0) {
-				fprintf( stderr,
-							"Configuration Error \"%s\", Line %d: at use %s:%s\n",
-							config_source, ConfigLineNo, name, rhs );
-				goto cleanup;
-			}
-		} else if (is_include) {
-			FileMacro.line = ConfigLineNo; // save current line number around the recursive call
-			if ((is_include > 1) && !is_piped_command(name)) {
-				std::string cmd(name); cmd += " |";
-				if (use_default_param_table) local_config_sources.append(cmd.c_str());
-				retval = Read_config(cmd.c_str(), depth+1, macro_set, expand_flag, check_runtime_security, subsys, config_errmsg);
-			} else {
-				if (use_default_param_table) local_config_sources.append(name);
-				retval = Read_config(name, depth+1, macro_set, expand_flag, check_runtime_security, subsys, config_errmsg);
-			}
-			int last_line = ConfigLineNo; // get the exit line from the recursive call
-			ConfigLineNo = FileMacro.line; // restore the global line number.
-
-			if (retval < 0) {
-				fprintf( stderr,
-							"Configuration Error \"%s\", Line %d, Include Depth %d: %s\n",
-							name, last_line, depth+1, config_errmsg.c_str());
-				config_errmsg.clear();
-				goto cleanup;
-			}
-		} else {
-
-			/* Check that "name" is a legal identifier : only
-			   alphanumeric characters and _ allowed*/
-			if( !is_valid_param_name(name) ) {
-				fprintf( stderr,
-						 "Configuration Error \"%s\", Line %d: Illegal Identifier: <%s>\n",
-						 config_source, ConfigLineNo, (name?name:"(null)") );
-				retval = -1;
-				goto cleanup;
-			}
-
-			if( expand_flag == EXPAND_IMMEDIATE ) {
-				value = expand_macro(rhs, macro_set);
-				if( value == NULL ) {
-					retval = -1;
-					goto cleanup;
-				}
-			} else  {
-				/* expand self references only */
-				//PRAGMA_REMIND("TJ: this handles only trivial self-refs, needs rethink.")
-				value = expand_self_macro(rhs, macro_set, name, subsys);
-				if( value == NULL ) {
-					retval = -1;
-					goto cleanup;
-				}
-			}
-
-			if( op == ':' || op == '=' ) {
-					/*
-					  Yee haw!!! We can treat "expressions" and "macros"
-					  the same way: just insert them into the config hash
-					  table.  Everything now behaves like macros used to
-					  Derek Wright <wright@cs.wisc.edu> 4/11/00
-					*/
-				FileMacro.line = ConfigLineNo;
-				insert(name, value, macro_set, FileMacro);
-			} else {
-				fprintf( stderr,
-					"Configuration Error \"%s\", Line %d: Syntax Error, missing : or =\n",
-					config_source, ConfigLineNo );
-				retval = -1;
-				goto cleanup;
-			}
-		}
-
-		FREE( name );
-		name = NULL;
-		FREE( value );
-		value = NULL;
+		return NULL;
 	}
 
-	if (ifstack.inside_if()) {
-		fprintf(stderr,
-				"Configuration Error \"%s\", Line %d: \n",
-				config_source, ConfigLineNo );
-		config_errmsg = "endif(s) not found before end-of-file";
-		retval = -1;
-		goto cleanup;
-	}
 
- cleanup:
-	if(name) {
-		FREE( name );
+	// finally, open the cache file that we just wrote. we will parse this file,
+	// but pretend that the original source is what we are reading when we generate error messages.
+	MACRO_SOURCE cache_source;
+	fp = Open_macro_source(cache_source, dest, false, macro_set, errmsg);
+	if (fp) {
+		// initialize a MACRO_SOURCE for the actual input if we succeed in opening the file.
+		insert_source(source, macro_set, macro_source);
+		macro_source.is_command = source_is_command;
 	}
-	if(value) {
-		FREE( value );
-	}
-#endif
-
-	if ( conf_fp ) {
-		if ( is_pipe_cmd ) {
-			int exit_code = my_pclose( conf_fp );
-			if ( retval == 0 && exit_code != 0 ) {
-				fprintf( stderr, "Configuration Error \"%s\": "
-						 "command terminated with exit code %d\n",
-						 config_source, exit_code );
-				retval = -1;
-			}
-		} else {
-			fclose( conf_fp );
-		}
-	}
-	return retval;
+	return fp;
 }
-#endif
+
 
 /*
-** Just compute a hash value for the given string such that
-** 0 <= value < size 
+** lowest level macro lookup function, looks up a name in the given macro set
+** but does not look in the macro_set defaults.  if prefix is supplied 
+** then prefix.name is looked up.
 */
-#if 0 // this is not currently used.
-int
-condor_hash( register const char *string, register int size )
+
+// compare key to prefix+sep+name in case-insensitive way.
+int strjoincasecmp(const char * key, const char * prefix, const char * name, char sep)
 {
-	register unsigned int		answer;
-
-	answer = 1;
-
-	for( ; *string; string++ ) {
-		answer <<= 1;
-		answer += (int)*string;
+	const char * k = key;
+	const char * p = prefix;
+	if (prefix) {
+		while (*k && tolower(*k) == tolower(*p)) { ++k; ++p; }
+		if ( ! *k) { // ran out of key
+			if ( ! *p) return name ? -1 : 0;
+			else return *p;
+		} else if (*p) { // still have prefix, but does not match
+			return tolower(*p) > tolower(*k) ? -1 : 1;
+		} else if (sep) {
+			if (*k == sep) ++k;
+			else return (int)(unsigned char)sep > (int)(unsigned char)*k ? -1 : 1;
+		}
+		if ( ! name) return 1;
 	}
-	answer >>= 1;	/* Make sure not negative */
-	answer %= size;
-	return answer;
+	return strcasecmp(k, name);
 }
-#endif
 
-// case-insensitive hash, usable when the character set of name
-// is restricted to A-Za-Z0-9 and symbols except []{}\|^~
-#if 0 // this is not currently used
-int
-condor_hash_symbol_name(const char *name, int size)
-{
-	register const char * psz = name;
-	unsigned int answer = 1;
-
-	// in order to make this hash interoperate with strlwr/condor_hash
-	// _ is the only legal character for symbol name for which |= 0x20
-	// is not benign.  the test for _ is needed only to make this hash
-	// behave identically to strlwr/condor_hash. 
-	for( ; *psz; ++psz) {
-		answer <<= 1;
-		int ch = (int)*psz;
-		if (ch != '_') ch |= 0x20;
-		answer += ch;
-	}
-	answer >>= 1;	/* Make sure not negative */
-	answer %= size;
-	return answer;
-}
-#endif
-
-/*
-** Insert the parameter name and value into the given hash table.
-*/
-//PRAGMA_REMIND("TJ: insert bug - self refs to default refs never expanded")
-
-extern "C++" MACRO_ITEM* find_macro_item (const char *name, MACRO_SET& set)
+extern "C++" MACRO_ITEM* find_macro_item (const char *name, const char * prefix, MACRO_SET& set)
 {
 	int cElms = set.size;
 	MACRO_ITEM* aTable = set.table;
@@ -1880,7 +1915,7 @@ extern "C++" MACRO_ITEM* find_macro_item (const char *name, MACRO_SET& set)
 	if (set.sorted < set.size) {
 		// use a brute force search on the unsorted parts of the table.
 		for (int ii = set.sorted; ii < cElms; ++ii) {
-			if (MATCH == strcasecmp(aTable[ii].key, name))
+			if (MATCH == strjoincasecmp(aTable[ii].key, prefix, name, '.'))
 				return &aTable[ii];
 		}
 		cElms = set.sorted;
@@ -1897,7 +1932,7 @@ extern "C++" MACRO_ITEM* find_macro_item (const char *name, MACRO_SET& set)
 			return NULL; // return null for "not found"
 
 		int ix = (ixLower + ixUpper) / 2;
-		int iMatch = strcasecmp(aTable[ix].key, name);
+		int iMatch = strjoincasecmp(aTable[ix].key, prefix, name, '.');
 		if (iMatch < 0)
 			ixLower = ix+1;
 		else if (iMatch > 0)
@@ -1907,6 +1942,8 @@ extern "C++" MACRO_ITEM* find_macro_item (const char *name, MACRO_SET& set)
 	}
 }
 
+// insert a source name into the MACRO_SET's table of names
+// and initialize the MACRO_SOURCE.
 void insert_source(const char * filename, MACRO_SET & set, MACRO_SOURCE & source)
 {
 	if ( ! set.sources.size()) {
@@ -1965,12 +2002,12 @@ static bool same_param_value(
 	return false;
 }
 
-void insert(const char *name, const char *value, MACRO_SET & set, const MACRO_SOURCE & source)
+void insert_macro(const char *name, const char *value, MACRO_SET & set, const MACRO_SOURCE & source, MACRO_EVAL_CONTEXT & ctx)
 {
 	// if already in the macro-set, we need to expand self-references and replace
-	MACRO_ITEM * pitem = find_macro_item(name, set);
+	MACRO_ITEM * pitem = find_macro_item(name, NULL, set);
 	if (pitem) {
-		char * tvalue = expand_self_macro(value, set, name, NULL);
+		char * tvalue = expand_self_macro(value, name, set, ctx);
 		if (MATCH != strcmp(tvalue, pitem->raw_value)) {
 			pitem->raw_value = set.apool.insert(tvalue);
 		}
@@ -1983,7 +2020,8 @@ void insert(const char *name, const char *value, MACRO_SET & set, const MACRO_SO
 			pmeta->inside = (source.is_inside != false);
 			pmeta->param_table = false;
 			// use the name here in case we have a compound name, i.e "master.value"
-			int param_id = param_default_get_id(name);
+			const char * post_prefix = NULL;
+			int param_id = param_default_get_id(name, &post_prefix);
 			const char * def_value = param_default_rawval_by_id(param_id);
 			pmeta->matches_default = (def_value == pitem->raw_value);
 			if ( ! pmeta->matches_default) {
@@ -2024,12 +2062,13 @@ void insert(const char *name, const char *value, MACRO_SET & set, const MACRO_SO
 	}
 
 	int matches_default = false;
-	int param_id = param_default_get_id(name);
+	const char * post_prefix = NULL; // if non-null, a pointer to the name after the "subsys." or "localname."
+	int param_id = param_default_get_id(name, &post_prefix);
 	const char * def_value = param_default_rawval_by_id(param_id);
 	bool is_path = param_default_ispath_by_id(param_id);
 	if (same_param_value(def_value, value, is_path)) {
 		matches_default = true; // flag value as matching the default.
-		if ( ! (set.options & CONFIG_OPT_KEEP_DEFAULTS))
+		if ( ! post_prefix && ! (set.options & CONFIG_OPT_KEEP_DEFAULTS))
 			return; // don't put default-matching values into the macro set
 	}
 
@@ -2071,7 +2110,7 @@ void insert(const char *name, const char *value, MACRO_SET & set, const MACRO_SO
 
 int increment_macro_use_count (const char *name, MACRO_SET & set)
 {
-	MACRO_ITEM* pitem = find_macro_item(name, set);
+	MACRO_ITEM* pitem = find_macro_item(name, NULL, set);
 	if (pitem && set.metat) {
 		MACRO_META* pmeta = &set.metat[pitem - set.table];
 		return ++(pmeta->use_count);
@@ -2081,7 +2120,7 @@ int increment_macro_use_count (const char *name, MACRO_SET & set)
 
 void clear_macro_use_count (const char *name, MACRO_SET & set)
 {
-	MACRO_ITEM* pitem = find_macro_item(name, set);
+	MACRO_ITEM* pitem = find_macro_item(name, NULL, set);
 	if (pitem && set.metat) {
 		MACRO_META* pmeta = &set.metat[pitem - set.table];
 		pmeta->ref_count = pmeta->use_count = 0;
@@ -2090,7 +2129,7 @@ void clear_macro_use_count (const char *name, MACRO_SET & set)
 
 int get_macro_use_count (const char *name, MACRO_SET & set)
 {
-	MACRO_ITEM* pitem = find_macro_item(name, set);
+	MACRO_ITEM* pitem = find_macro_item(name, NULL, set);
 	if (pitem && set.metat) {
 		MACRO_META* pmeta = &set.metat[pitem - set.table];
 		return pmeta->use_count;
@@ -2100,7 +2139,7 @@ int get_macro_use_count (const char *name, MACRO_SET & set)
 
 int get_macro_ref_count (const char *name, MACRO_SET & set)
 {
-	MACRO_ITEM* pitem = find_macro_item(name, set);
+	MACRO_ITEM* pitem = find_macro_item(name, NULL, set);
 	if (pitem && set.metat) {
 		MACRO_META* pmeta = &set.metat[pitem - set.table];
 		return pmeta->ref_count;
@@ -2278,14 +2317,17 @@ string_to_long( const char *s, long *valuep )
 	return 0;
 }
 
-#define USE_GENERIC_SPECIAL_CONFIG_MACROS 1
-#ifdef USE_GENERIC_SPECIAL_CONFIG_MACROS
-int next_special_config_macro (
-	int (*check_prefix)(const char *dollar, int length, bool & idchar_only),
-	char *value,
-	char **leftp, char **namep, char **rightp, char** dollar );
+// classes derived from this class can be used to 
+// control skipping of some instances of a macro based
+// on the body text. 
+class ConfigMacroBodyCheck {
+public:
+	virtual bool skip(int func_id, const char * body, int bodylen) = 0;
+};
 
 enum {
+	MACRO_ID_DOUBLEDOLLAR=-2,
+	MACRO_ID_NORMAL=-1,
 	SPECIAL_MACRO_ID_NONE=0,
 	SPECIAL_MACRO_ID_ENV,
 	SPECIAL_MACRO_ID_RANDOM_CHOICE,
@@ -2295,12 +2337,26 @@ enum {
 	SPECIAL_MACRO_ID_INT,
 	SPECIAL_MACRO_ID_REAL,
 	SPECIAL_MACRO_ID_STRING,
+	SPECIAL_MACRO_ID_EVAL,
 	SPECIAL_MACRO_ID_BASENAME,
 	SPECIAL_MACRO_ID_DIRNAME,
 	SPECIAL_MACRO_ID_FILENAME,
 };
 
-static int is_special_config_macro(const char* prefix, int length, bool & idchar_only)
+enum MACRO_BODY_CHARS {
+	MACRO_BODY_ANYTHING=0,   // allow anything other than ) in the body
+	MACRO_BODY_IDCHAR_COLON, // allow only identifier characters up to a : and  then a few more characters after
+	MACRO_BODY_META_ARG,     // allow only digits up to : ? or # then a few more characters after :
+	MACRO_BODY_SCAN_BRACKET, // scan ahead for "])"
+};
+
+int next_config_macro (
+	int (*check_prefix)(const char *dollar, int length, MACRO_BODY_CHARS & idchar_only),
+	ConfigMacroBodyCheck & body,
+	char *value, int search_pos,
+	char **leftp, char **namep, char **rightp, char** dollar );
+
+static int is_special_config_macro(const char* prefix, int length, MACRO_BODY_CHARS & bodychars)
 {
 	#define PRE(n) { "$" #n, sizeof(#n), SPECIAL_MACRO_ID_ ## n }
 	static const struct {
@@ -2316,20 +2372,24 @@ static int is_special_config_macro(const char* prefix, int length, bool & idchar
 		PRE(INT),
 		PRE(REAL),
 		PRE(STRING),
+		PRE(EVAL),
 		PRE(BASENAME), PRE(DIRNAME),
 	};
 	#undef PRE
 
+	if (length <= 1)
+		return 0;
+
 	// tell the caller that we allow any char in the body of this config macro
 	// we will set this to true only if $ENV ends up being the matched special macro.
-	idchar_only = false;
+	bodychars = MACRO_BODY_ANYTHING;
 
 	// the special filename macro function has a bunch of names, so check it first.
 	if (length >= 1 && prefix[1] == 'F') {
 		bool is_fname = true;
 		for (int ii = 2; ii < length; ++ii) {
 			int ch = prefix[ii] | 0x20; // convert to lowercase for comparision.
-			if (ch != 'p' && ch != 'n' && ch != 'x' && ch != 'd' && ch != 'q') {
+			if (ch != 'p' && ch != 'n' && ch != 'x' && ch != 'd' && ch != 'q' && ch != 'a' && ch != 'b' && ch != 'f') {
 				is_fname = false;
 				break;
 			}
@@ -2340,7 +2400,7 @@ static int is_special_config_macro(const char* prefix, int length, bool & idchar
 
 	for (int ii = 0; ii < (int)COUNTOF(pre); ++ii) {
 		if (length == pre[ii].length && MATCH == strncmp(prefix, pre[ii].name, pre[ii].length)) {
-			idchar_only = (pre[ii].id == SPECIAL_MACRO_ID_ENV);
+			if (pre[ii].id == SPECIAL_MACRO_ID_ENV) { bodychars = MACRO_BODY_IDCHAR_COLON; }
 			return pre[ii].id;
 		}
 	}
@@ -2348,19 +2408,49 @@ static int is_special_config_macro(const char* prefix, int length, bool & idchar
 	return 0;
 }
 
-#else
-extern "C" int find_special_config_macro( const char *prefix, bool only_id_chars,
-		register char *value, register char **leftp,
-		register char **namep, register char **rightp);
-#endif
+static int is_config_macro(const char* prefix, int length, MACRO_BODY_CHARS & bodychars)
+{
+	// prefix of just "$" is our normal macro expansion
+	// prefix of just "$$" is dollardollar macro expansion, we should not match those...
+	if (length == 1) {
+		bodychars = MACRO_BODY_IDCHAR_COLON;
+		return MACRO_ID_NORMAL;
+	} else if (length > 1 && prefix[1] == '$') {
+		return 0;
+	}
+	return is_special_config_macro(prefix, length, bodychars);
+}
 
+static int is_meta_arg_macro(const char* /*prefix*/, int length, MACRO_BODY_CHARS & bodychars)
+{
+	// prefix of just "$" is our normal macro expansion
+	if (length == 1) {
+		bodychars = MACRO_BODY_META_ARG;
+		return MACRO_ID_NORMAL;
+	}
+	return 0;
+}
 
-char * strdup_quoted(const char* str, int cch, bool quoted) {
+const char * strlen_unquote(const char * str, int & cch) {
+	cch = strlen(str);
+	if (cch > 1 && str[0] == str[cch-1] && (str[0] == '"' || str[0] == '\'')) {
+		cch -= 2;
+		return str+1;
+	}
+	return str;
+}
+
+char * strlen_unquote(char * str, int & cch) { return const_cast<char*>(strlen_unquote((const char*)str, cch)); }
+
+#if 0
+// strdup a string with room to grow and an optional leading quote
+// and room for a trailing quote.
+char * strdup_quoted(const char* str, int cch, char quoted) {
 	if (cch < 0) cch = (int)strlen(str);
 
 	// ignore leading and/or trailing quotes when we dup
-	if (*str=='"') { ++str; --cch; }
-	if (cch > 0 && str[cch-1] == '"') --cch;
+	if (*str=='"' || (*str && *str == quoted)) { ++str; --cch; }
+	if (cch > 0 && (str[cch-1] == '"' || str[cch-1] == quoted)) --cch;
 
 	// malloc with room for quotes and a terminating 0
 	char * out = (char*)malloc(cch+3);
@@ -2368,13 +2458,244 @@ char * strdup_quoted(const char* str, int cch, bool quoted) {
 	char * p = out;
 
 	// copy, adding quotes or not as requested.
-	if (quoted) { *p++ = '"'; }
+	if (quoted) { *p++ = quoted; }
 	memcpy(p, str, cch*sizeof(str[0]));
-	if (quoted) { p[cch++] = '"'; }
+	if (quoted) { p[cch++] = quoted; }
 	p[cch] = 0;
 
 	return out;
 }
+#endif
+
+// strdup a string with room to grow and an optional leading quote
+// and room for a trailing quote.
+char * strcpy_quoted(char* out, const char* str, int cch, char quoted) {
+	ASSERT(cch >= 0);
+
+	// ignore leading and/or trailing quotes when we dup
+	char quote_char = 0;
+	if (*str=='"' || (*str && *str == quoted)) { quote_char = *str; ++str; --cch; }
+	if (cch > 0 && str[cch-1] && str[cch-1] == quote_char) --cch;
+
+	ASSERT(out);
+	char * p = out;
+
+	// copy, adding quotes or not as requested.
+	if (quoted) { *p++ = quoted; }
+	memcpy(p, str, cch*sizeof(str[0]));
+	if (quoted) { p[cch++] = quoted; }
+	p[cch] = 0;
+
+	return out;
+}
+
+// strdup a string with room to grow and an optional leading quote
+// and room for a trailing quote.
+char * strdup_quoted(const char* str, int cch, char quoted) {
+	if (cch < 0) cch = (int)strlen(str);
+
+	// malloc with room for quotes and a terminating 0
+	char * out = (char*)malloc(cch+3);
+	ASSERT(out);
+	return strcpy_quoted(out, str, cch, quoted);
+}
+
+
+char * strdup_full_path_quoted(const char *name, int cch, MACRO_EVAL_CONTEXT & ctx, char quoted, bool win_path)
+{
+	if (
+#if defined(WIN32)
+		( name[0] == '\\' || name[0] == '/' || (name[0] && name[1] == ':') )
+#else
+		( name[0] == '/' ) /* absolute wrt whatever the root is */
+#endif
+		&& ctx.cwd && ctx.cwd[0]
+	   )
+	{
+		return strdup_quoted(name, cch, quoted);
+	}
+	else
+	{
+		int cch_cwd = strlen(ctx.cwd);
+		const char delim_char = win_path ? '\\' : '/';
+	#ifdef WIN32
+		bool has_dir_delim = ctx.cwd[cch_cwd-1] == '/' || ctx.cwd[cch_cwd-1] == '\\';
+	#else
+		bool has_dir_delim = ctx.cwd[cch_cwd-1] == '/' || (win_path && (ctx.cwd[cch_cwd-1] == '\\'));
+	#endif
+		if (has_dir_delim) { cch_cwd -= 1; }
+		if (cch < 0) { name = strlen_unquote(name, cch); }
+		char * str = strdup_quoted(ctx.cwd, cch_cwd + cch + 1, quoted);
+		if (str) {
+			char * p = str + cch_cwd;
+			if (quoted) ++p;
+		#ifdef WIN32
+			if (cch > 2 && name[0] == '.' && (name[1] == '/' || name[1] == '\\')) {
+		#else
+			if (cch > 2 && name[0] == '.' && (name[1] == '/' || (win_path && (name[1] == '\\')))) {
+		#endif
+				name += 2;
+				cch -= 2;
+			}
+			strcpy_quoted(p + (quoted ? 0 : 1), name, cch, quoted);
+			*p = delim_char;
+		}
+		return str;
+	}
+}
+
+
+// use this class with next_config_macro to skip $(DOLLAR)
+class NoDollarBody : public ConfigMacroBodyCheck {
+public:
+	virtual bool skip(int func_id, const char * body, int len) {
+		return func_id == MACRO_ID_NORMAL
+			&& len == DOLLAR_ID_LEN
+			&& MATCH == strncasecmp(body, DOLLAR_ID, DOLLAR_ID_LEN);
+	}
+};
+
+class DollarOnlyBody : public ConfigMacroBodyCheck {
+public:
+	virtual bool skip(int func_id, const char * body, int len) {
+		return func_id != MACRO_ID_NORMAL
+			|| len != DOLLAR_ID_LEN
+			|| MATCH != strncasecmp(body, DOLLAR_ID, DOLLAR_ID_LEN);
+	}
+};
+
+
+
+#ifdef METAKNOBS_WITH_ARGS
+
+class MetaArgOnlyBody : public ConfigMacroBodyCheck {
+public:
+	int index;
+	int colon; // offset of def value from 
+	bool empty_check;
+	bool num_args;
+	MetaArgOnlyBody() : index(0), colon(0), empty_check(false), num_args(false) {}
+	virtual bool skip(int func_id, const char * body, int /*len*/) {
+		if (func_id != MACRO_ID_NORMAL) return true;
+		if ( ! body || ! isdigit(*body)) return true;
+		char * pend;
+		index = strtol(body, &pend, 10);
+		if (pend) {
+			num_args = empty_check = false;
+			if (*pend == '?') { ++pend; empty_check = true; }
+			else if (*pend == '#' || *pend == '+') { ++pend; num_args = true; }
+			else if (*pend == ':') { colon = (int)(pend - body)+1; }
+		}
+		return false;
+	}
+};
+
+// destructively trim trailing whitespace from a input string
+// then return a pointer to the first non-whitespace character
+// of its c_str()
+const char * trimmed_cstr(std::string &str)
+{
+	if (str.empty()) return "";
+
+	int len = str.length();
+	int end = len - 1;
+	while (end > 0 && isspace(str[end])) --end;
+	if (end != (len - 1)) {
+		str[end+1] = 0;
+	}
+	const char * p = str.c_str();
+	while (*p && isspace(*p)) ++p;
+	return p;
+}
+
+// return true if value has any $(<num>) macros to expand.
+bool has_meta_args(const char * value)
+{
+	const char * p = strstr(value, "$(");
+	while (p) {
+		p = p+2;
+		if (isdigit(*p)) return true;
+		p = strstr(p, "$(");
+	}
+	return false;
+}
+
+// return copy of input value that has $(<num>) expanded against argstr
+// argstr should be a string containing a comma separated list of values
+// $(0) expands to all of argstr with leading and trailing whitespace trimmed
+// $(1) expands to everything up to the first comma of argstr with whitespace trimmed
+// $(2) expands to everthing between the first and second commas of argstr with whitespace trimmed.
+// ...
+//
+char * expand_meta_args(const char *value, std::string & argstr)
+{
+	char *tmp = strdup( value );
+	char *left, *name, *right, *func;
+	const char *tvalue;
+	char *rval;
+
+	bool all_done = false;
+	while ( ! all_done) { // loop until all done expanding
+		all_done = true;
+
+		// locate and expand any $(<num>) macros, where
+		// <num> is a number optionally followed by ? or #
+		// $(0) expands to all args
+		// $(0#) expands to the number of args
+		// $(1) expands to the first arg with whitespace stripped
+		// $(1?) expands to 1 if arg 1 is non-empty, to 0 if it is empty
+		// $(1+) expands to all args starting with 1
+		//
+		MetaArgOnlyBody meta_only; // this selects only $(<num>) macros
+		int special_id = next_config_macro(is_meta_arg_macro, meta_only, tmp, 0, &left, &name, &right, &func);
+		if (special_id) {
+			all_done = false;
+
+			StringTokenIterator it(argstr, 40, ","); it.rewind();
+
+			std::string buf;
+			if (meta_only.index <= 0) {
+				if (meta_only.num_args) {
+					int num = 0;
+					while (it.next_string()) { ++num; }
+					formatstr(buf, "%d", num);
+				} else {
+					buf = argstr;
+				}
+			} else {
+				int ix = 1;
+				if (meta_only.num_args) {
+					const char * remain = it.remain();
+					while (remain && (ix < meta_only.index)) { ++ix; it.next_string(); remain = it.remain(); }
+					if (remain) {
+						if (*remain == ',') ++remain; // skip leading comma
+						buf = remain;
+					}
+				} else {
+					const std::string * pi = it.next_string();
+					while (pi && (ix < meta_only.index)) { ++ix; pi = it.next_string(); }
+					if (pi) {
+						buf = *pi;
+					}
+				}
+			}
+			tvalue = trimmed_cstr(buf);
+			if (meta_only.empty_check) {
+				tvalue = *tvalue ? "1" : "0";
+			}
+
+			rval = (char *)MALLOC( (unsigned)(strlen(left) + strlen(tvalue) + strlen(right) + 1));
+			ASSERT(rval);
+
+			(void)sprintf( rval, "%s%s%s", left, tvalue, right );
+			FREE( tmp );
+			tmp = rval;
+		}
+	}
+
+	return tmp;
+}
+#endif
 
 /*
 ** Expand parameter references of the form "left$(middle)right".  This
@@ -2383,493 +2704,195 @@ char * strdup_quoted(const char* str, int cch, bool quoted) {
 ** replacing $ENV(middle) with getenv(middle).
 ** Also expand references of the form "left$RANDOM_CHOICE(middle)right".
 */
-extern "C" char *
-expand_macro(const char *value,
-			 MACRO_SET& macro_set,
-			 bool use_default_param_table,
-			 const char *subsys,
-			 int use)
+
+
+const char * lookup_macro_exact_no_default(const char *name, MACRO_SET & set, int use)
 {
-	char *tmp = strdup( value );
-	char *left, *name, *right;
-	const char *tvalue;
-	char *rval;
-
-	bool all_done = false;
-	while( !all_done ) {		// loop until all done expanding
-		all_done = true;
-
-	#ifdef USE_GENERIC_SPECIAL_CONFIG_MACROS
-		char * func;
-		int special_id = next_special_config_macro(is_special_config_macro, tmp, &left, &name, &right, &func);
-		if (special_id) {
-			all_done = false;
-			char * buf = NULL; // malloc or strdup'd buffer (if needed)
-			switch (special_id) {
-				case SPECIAL_MACRO_ID_ENV:
-				{
-					tvalue = getenv(name);
-					if( tvalue == NULL ) {
-						//EXCEPT("Can't find %s in environment!",name);
-						tvalue = "UNDEFINED";
-					}
-				}
-				break;
-
-				case SPECIAL_MACRO_ID_RANDOM_CHOICE:
-				{
-					StringList entries(name,",");
-					int num_entries = entries.number();
-					tvalue = NULL;
-					// the the list we are choosing from has only one entry
-					// try and use that entry as a macro name.
-					if (num_entries == 1) {
-						entries.rewind();
-						const char * list_name = entries.next();
-						if ( ! list_name) {
-						   EXCEPT( "$RANDOM_CHOICE() config macro: no list!" );
-						}
-
-						const char * lval = lookup_macro(list_name, subsys, macro_set, use);
-						if (subsys && ! lval) lval = lookup_macro(list_name, NULL, macro_set, use);
-						if (macro_set.defaults && ! lval) lval = lookup_macro_def(list_name, subsys, macro_set, use);
-
-						// if the first entry resolved to a macro, clear the entries list and
-						// repopulate it from the value of the macro.
-						if (lval) {
-							entries.clearAll(); list_name = NULL;
-							// now re-populate the entries list from lval.
-							if (strchr(lval, '$')) {
-								char * tmp3 = expand_macro(lval, macro_set, use_default_param_table, subsys, use);
-								if (tmp3) {
-									entries.initializeFromString(tmp3);
-									free(tmp3);
-								}
-							} else {
-								entries.initializeFromString(lval);
-							}
-							num_entries = entries.number();
-						} else {
-							// if the lookup failed, fall through to use the the list name as the list item,
-							// we do this for backward compatibility with the original behavior of RANDOM_CHOICE
-						}
-					}
-					if ( num_entries > 0 ) {
-						int rand_entry = (get_random_int() % num_entries) + 1;
-						int i = 0;
-						entries.rewind();
-						while ( (i < rand_entry) && (tvalue=entries.next()) ) {
-							i++;
-						}
-					}
-					if( tvalue == NULL ) {
-						EXCEPT("$RANDOM_CHOICE() macro in config file empty!" );
-					}
-					tvalue = buf = strdup(tvalue);
-				}
-				break;
-
-				case SPECIAL_MACRO_ID_RANDOM_INTEGER:
-				{
-					StringList entries(name, ",");
-
-					entries.rewind();
-					const char *tmp2;
-
-					tmp2 = entries.next();
-					long	min_value=0;
-					if ( string_to_long( tmp2, &min_value ) < 0 ) {
-						EXCEPT( "$RANDOM_INTEGER() config macro: invalid min!" );
-					}
-
-					tmp2 = entries.next();
-					long	max_value=0;
-					if ( string_to_long( tmp2, &max_value ) < 0 ) {
-						EXCEPT( "$RANDOM_INTEGER() config macro: invalid max!" );
-					}
-
-					tmp2 = entries.next();
-					long	step = 1;
-					if ( string_to_long( tmp2, &step ) < -1 ) {
-						EXCEPT( "$RANDOM_INTEGER() config macro: invalid step!" );
-					}
-
-					if ( step < 1 ) {
-						EXCEPT( "$RANDOM_INTEGER() config macro: invalid step!" );
-					}
-					if ( min_value > max_value ) {
-						EXCEPT( "$RANDOM_INTEGER() config macro: min > max!" );
-					}
-
-					// Generate the random value
-					long	range = step + max_value - min_value;
-					long 	num = range / step;
-					long	random_value =
-						min_value + (get_random_int() % num) * step;
-
-					// And, convert it to a string
-					const int cbuf = 20;
-					buf = (char*)malloc(cbuf+1);
-					snprintf( buf, cbuf, "%ld", random_value );
-					buf[cbuf] = '\0';
-					tvalue = buf;
-				}
-				break;
-
-					// the $CHOICE() macro comes in 2 forms
-					// $CHOICE(index,list_name) or $CHOICE(index,item1,item2,...)
-					//   index can either be an integer, or the macro name of an integer.
-					//   list_name must be the macro name of a comma separated list of items.
-				case SPECIAL_MACRO_ID_CHOICE:
-				{
-				#if 1 // use the version of stringlist that doesn't eat empty fields or extra delimiters.
-					StringList entries(name, ',', true);
-				#else
-					StringList entries(name, ",");
-				#endif
-					entries.rewind();
-
-					const char * index_name = entries.next();
-					if ( ! index_name) {
-					   EXCEPT( "$CHOICE() config macro: no index!" );
-					}
-					const char * mval = lookup_macro(index_name, subsys, macro_set, use);
-					if (subsys && ! mval) mval = lookup_macro(index_name, NULL, macro_set, use);
-					if (macro_set.defaults && ! mval) mval = lookup_macro_def(index_name, subsys, macro_set, use);
-					if ( ! mval) mval = index_name;
-
-					char * tmp2 = NULL;
-					if (strchr(mval, '$')) {
-						tmp2 = expand_macro(mval, macro_set, use_default_param_table, subsys, use);
-						mval = tmp2;
-					}
-
-					long long index = -1;
-					if ( ! string_is_long_param(mval, index) || index < 0 || index >= INT_MAX) {
-					   EXCEPT( "$CHOICE() macro: %s is invalid index!", mval );
-					}
-
-					tvalue = NULL;
-					if (entries.number() == 2) {
-						const char * list_name = entries.next();
-						if ( ! list_name) {
-						   EXCEPT( "$CHOICE() config macro: no list!" );
-						}
-
-						const char * lval = lookup_macro(list_name, subsys, macro_set, use);
-						if (subsys && ! lval) lval = lookup_macro(list_name, NULL, macro_set, use);
-						if (macro_set.defaults && ! lval) lval = lookup_macro_def(list_name, subsys, macro_set, use);
-						if ( ! lval) {
-							EXCEPT( "$CHOICE() macro: no list named %s!", list_name);
-						}
-
-						// now populate the entries list from lval.
-						entries.clearAll(); list_name = index_name = NULL;
-						if (strchr(lval, '$')) {
-							char * tmp3 = expand_macro(lval, macro_set, use_default_param_table, subsys, use);
-							if (tmp3) {
-								entries.initializeFromString(tmp3);
-								free(tmp3);
-							}
-						} else {
-							entries.initializeFromString(lval);
-						}
-						entries.rewind();
-					}
-
-					// scan the list looking for an item with the given index
-					for (int ii = 0; ii <= (int)index; ++ii) {
-						const char * val = entries.next();
-						if (val != NULL && ii == index) {
-							tvalue = buf = strdup(val);
-							break;
-						}
-					}
-
-					if ( ! tvalue) {
-					   EXCEPT( "$CHOICE() config macro: index %d is out of range!", (int)index );
-					}
-
-					if (tmp2) free(tmp2); tmp2 = NULL;
-				}
-				break;
-
-					// $SUBSTR(name,length) or $SUBSTR(name,start,length)
-					// lookup and macro expand name, then extract a substring.
-					// negative length values of length mean 'from the end'
-				case SPECIAL_MACRO_ID_SUBSTR:
-				{
-					char * len_arg = NULL;
-					char * start_arg = strchr(name, ',');
-					if ( ! start_arg) {
-					   EXCEPT( "$SUBSTR() macro: no length specified!" );
-					}
-
-					*start_arg++ = 0;
-					len_arg = strchr(start_arg, ',');
-					if (len_arg) *len_arg++ = 0;
-
-					int start_pos = 0;
-					if (start_arg) {
-						const char * arg = lookup_macro(start_arg, subsys, macro_set, use);
-						if (subsys && ! arg) arg = lookup_macro(start_arg, NULL, macro_set, use);
-						if (macro_set.defaults && ! arg) arg = lookup_macro_def(start_arg, subsys, macro_set, use);
-						if ( ! arg) arg = start_arg;
-
-						char * tmp3 = NULL;
-						if (strchr(arg, '$')) {
-							tmp3 = expand_macro(arg, macro_set, use_default_param_table, subsys, use);
-							arg = tmp3;
-						}
-
-						long long index = -1;
-						if ( ! string_is_long_param(arg, index) || index < INT_MIN || index >= INT_MAX) {
-						   EXCEPT( "$SUBSTR() macro: %s is invalid start index!", arg );
-						}
-						start_pos = (int)index;
-						if (tmp3) free(tmp3); tmp3 = NULL;
-					}
-
-					int sub_len = INT_MAX/2;
-					if (len_arg) {
-						const char * arg = lookup_macro(len_arg, subsys, macro_set, use);
-						if (subsys && ! arg) arg = lookup_macro(len_arg, NULL, macro_set, use);
-						if (macro_set.defaults && ! arg) arg = lookup_macro_def(len_arg, subsys, macro_set, use);
-						if ( ! arg) arg = len_arg;
-
-						char * tmp3 = NULL;
-						if (strchr(arg, '$')) {
-							tmp3 = expand_macro(arg, macro_set, use_default_param_table, subsys, use);
-							arg = tmp3;
-						}
-
-						long long index = -1;
-						if ( ! string_is_long_param(arg, index) || index < INT_MIN || index > INT_MAX) {
-						   EXCEPT( "$SUBSTR() macro: %s is invalid length !", arg );
-						}
-						sub_len = (int)index;
-						if (tmp3) free(tmp3); tmp3 = NULL;
-					}
-
-					const char * mval = lookup_macro(name, subsys, macro_set, use);
-					if (subsys && ! mval) mval = lookup_macro(name, NULL, macro_set, use);
-					if (macro_set.defaults && ! mval) mval = lookup_macro_def(name, subsys, macro_set, use);
-					if ( ! mval) {
-						tvalue = "";
-					} else {
-						tvalue = NULL;
-
-						if (strchr(mval, '$')) {
-							buf = expand_macro(mval, macro_set, use_default_param_table, subsys, use);
-						} else {
-							buf = strdup(mval);
-						}
-
-						int cch = strlen(buf);
-						// a negative starting pos means measure from the end
-						if (start_pos < 0) { start_pos = cch + start_pos; }
-						if (start_pos < 0) { start_pos = 0; }
-						else if (start_pos > cch) { start_pos = cch; }
-
-						tvalue = buf + start_pos;
-						cch -= start_pos;
-
-						// a negative length means measure from the end
-						if (sub_len < 0) { sub_len = cch + sub_len; }
-						if (sub_len < 0) { sub_len = 0; }
-						else if (sub_len > cch) { sub_len = cch; }
-
-						buf[start_pos + sub_len] = 0;
-					}
-				}
-				break;
-
-					// $INT(name) or $INT(name,fmt) or $REAL(name) $REAL(name,fmt)
-					// lookup name, macro expand it if necessary, then evaluate it as a int or double
-					//
-				case SPECIAL_MACRO_ID_INT:
-				case SPECIAL_MACRO_ID_REAL:
-				{
-					char * fmt = strchr(name, ',');
-					if (fmt) {
-						*fmt++ = 0;
-						const char * tmp_fmt = fmt;
-						printf_fmt_info fmt_info;
-						if ( ! parsePrintfFormat(&tmp_fmt, &fmt_info)
-							|| (fmt_info.type == PFT_STRING || fmt_info.type == PFT_RAW || fmt_info.type == PFT_VALUE)
-							|| (fmt_info.type == PFT_FLOAT && (special_id == SPECIAL_MACRO_ID_INT))
-							|| (fmt_info.type == PFT_INT && (special_id == SPECIAL_MACRO_ID_REAL))
-							) {
-							EXCEPT( "%s macro: '%s' is not a valid format specifier!",
-								(special_id == SPECIAL_MACRO_ID_INT) ? "$INT()" : "$REAL()", fmt);
-						}
-					}
-
-					const char * mval = lookup_macro(name, subsys, macro_set, use);
-					if (subsys && ! mval) mval = lookup_macro(name, NULL, macro_set, use);
-					if (macro_set.defaults && ! mval) mval = lookup_macro_def(name, subsys, macro_set, use);
-					if ( ! mval) mval = name;
-					tvalue = NULL;
-
-					char * tmp2 = NULL;
-					if (strchr(mval, '$')) {
-						tmp2 = expand_macro(mval, macro_set, use_default_param_table, subsys, use);
-						mval = tmp2;
-					}
-
-					if (special_id == SPECIAL_MACRO_ID_INT) {
-						long long int_val = -1;
-						if ( ! string_is_long_param(mval, int_val)) {
-						   EXCEPT( "$INT() macro: %s does not evaluate to an integer!", mval );
-						}
-
-						const int cbuf = 56;
-						tvalue = buf = (char*)malloc(cbuf+1);
-						snprintf( buf, cbuf, fmt ? fmt : "%lld", int_val );
-					} else {
-						double dbl_val = -1;
-						if ( ! string_is_double_param(mval, dbl_val)) {
-						   EXCEPT( "$REAL() macro: %s does not evaluate to an real!", mval );
-						}
-
-						const int cbuf = 56;
-						tvalue = buf = (char*)malloc(cbuf+1);
-						snprintf( buf, cbuf, fmt ? fmt : "%.16G", dbl_val );
-						if (fmt && ! strchr(buf, '.')) { strcat(buf, ".0"); } // force it to look like a real
-					}
-
-					if (tmp2) free(tmp2); tmp2 = NULL;
-				}
-				break;
-
-				case SPECIAL_MACRO_ID_DIRNAME:
-				case SPECIAL_MACRO_ID_BASENAME:
-				case SPECIAL_MACRO_ID_FILENAME:
-				{
-					const char * mval = lookup_macro(name, subsys, macro_set, use);
-					if (subsys && ! mval) mval = lookup_macro(name, NULL, macro_set, use);
-					if (macro_set.defaults && ! mval) mval = lookup_macro_def(name, subsys, macro_set, use);
-					tvalue = NULL;
-
-					// filename extraction macros, for expanding only parts of a filename in $(FILE).
-					// Any macro function of the form $Fqdpnx(FILE), where q,d,p,n,x are all optional
-					// and indicate which parts of the filename to keep.
-					// q - quote the result (incoming quotes are stripped if this is not specified)
-					// d - parent directory
-					// p - full directory path
-					// n - file basename without extension
-					// x - file extension, including the .
-
-					int parts = 0;
-					bool quoted = false;
-					if (special_id == SPECIAL_MACRO_ID_BASENAME) {
-						parts = 1|2;
-					} else if (special_id == SPECIAL_MACRO_ID_DIRNAME) {
-						parts = 4;
-					} else {
-						for (const char*p = func; *p != '('; ++p) {
-							switch (*p | 0x20) {
-							case 'x': parts |= 0x1; break;
-							case 'n': parts |= 0x2; break;
-							case 'p': parts |= 0x4; break;
-							case 'd': parts |= 0x8; break;
-							case 'q': quoted = true; break;
-							}
-						}
-					}
-
-					if (mval) {
-
-						buf = strdup_quoted(mval, -1, quoted);  // copy the macro value with quotes add/removed as requested.
-						int ixend = strlen(buf); // this will be the end of what we wish to return
-						int ixn = (int)(condor_basename(buf) - buf); // index of start of filename, ==0 if no path sep
-						int ixx = (int)(condor_basename_extension_ptr(buf+ixn) - buf); // index of . in extension, ==ixend if no ext
-						// if this is a bare filename, we can ignore the p & d flags if n or x is set
-						if ( ! ixn) { if (parts & (2|1)) parts &= ~(4|8); }
-
-						// set tvalue to start, and ixend to end of text we want to return.
-						switch (parts & 0xF)
-						{
-						case 1:     tvalue = buf+ixx;  break;
-						case 2|1:   tvalue = buf+ixn;  break;
-						case 2:     tvalue = buf+ixn;  ixend = ixx; break;
-						case 0:
-						case 4|2|1: tvalue = buf;      break;
-						case 4|1:   tvalue = buf;      break; // TODO: fix to strip out filename part?
-						case 4:     tvalue = buf; ixend = ixn; break;
-						case 4|2:   tvalue = buf; ixend = ixx; break;
-						default:
-							// ixn is 0 if no dir.
-							if (ixn > 0) {
-								char ch = buf[ixn-1]; buf[ixn-1] = 0; // truncate filename saving the old character
-								tvalue = condor_basename(buf); // tvalue now points to the start of the first directory
-								buf[ixn-1] = ch; // put back the dir/filename separator
-								if (2 == (parts&3)) { ixend = ixx; }
-								else if (0 == (parts&3)) { ixend = ixn; }
-								else if (1 == (parts&3)) { /* TODO: strip out filename part? */ }
-							} else {
-								// we get here when there is no dir, but only dir should be output
-								// so we pick a spot inside the buffer with room to quote
-								// and set start==end
-								ixend = 1;
-								tvalue = buf+ixend;
-							}
-						break;
-						}
-
-						// we may have truncated quotes in the switch statement above
-						// but if we did we know that buf has room to put them back.
-						if (quoted) {
-							int ixv = (int)(tvalue-buf);
-							if (buf[ixv] != '"') { ASSERT(ixv > 0); buf[--ixv] = '"'; tvalue = buf+ixv; }
-							if (ixend > 1 && buf[ixend-1] == '"') --ixend;
-							buf[ixend++] = '"';
-						}
-						// make sure that the end of tvalue is null terminated.
-						buf[ixend] = 0;
-					}
-					if ( ! tvalue) tvalue = "";
-				}
-				break;
-
-				default:
-					EXCEPT("Unknown special config macro %d!", special_id);
-				break;
-
-			}
-
-			rval = (char *)MALLOC( (unsigned)(strlen(left) + strlen(tvalue) + strlen(right) + 1));
-			ASSERT(rval);
-
-			(void)sprintf( rval, "%s%s%s", left, tvalue, right );
-			FREE( tmp );
-			tmp = rval;
-			if (buf) free(buf); buf = NULL;
+	MACRO_ITEM* pitem = find_macro_item(name, NULL, set);
+	if (pitem) {
+		if (set.metat && use) {
+			MACRO_META* pmeta = &set.metat[pitem - set.table];
+			pmeta->use_count += (use&1);
+			pmeta->ref_count += (use>>1)&1;
 		}
-	#else // ! USE_GENERIC_SPECIAL_CONFIG_MACROS
-		if (find_special_config_macro("$ENV",true,tmp, &left, &name, &right)) 
+		return pitem->raw_value;
+	}
+	return NULL;
+}
+
+
+const char * lookup_macro_exact_no_default(const char *name, const char *prefix, MACRO_SET & set, int use)
+{
+	MACRO_ITEM* pitem = find_macro_item(name, prefix, set);
+	if (pitem) {
+		if (set.metat && use) {
+			MACRO_META* pmeta = &set.metat[pitem - set.table];
+			pmeta->use_count += (use&1);
+			pmeta->ref_count += (use>>1)&1;
+		}
+		return pitem->raw_value;
+	}
+	return NULL;
+}
+
+// lookup macro in all of the usual places.  The lookup order is
+//    localname.name in config file
+//    localname.name in defaults table
+//    subsys.name in config file
+//    subsys.name in defaults table
+//    name in config file
+//    name in defaults table
+// return:
+//   NULL    if the macro does not exist in any of the tables
+//   ""      if the macro exists but was not given a value.
+//   string  if the macro was defined. the string pointer is valid until the next reconfig, it should not be freed.
+//
+
+const char * lookup_macro(const char * name, MACRO_SET & macro_set, MACRO_EVAL_CONTEXT & ctx)
+{
+	const char * lval = NULL;
+	if (ctx.localname) {
+		lval = lookup_macro_exact_no_default(name, ctx.localname, macro_set, ctx.use_mask);
+		if (lval) return lval;
+
+		if (macro_set.defaults && ! ctx.without_default) {
+			const MACRO_DEF_ITEM * p = find_macro_subsys_def_item(name, ctx.localname, macro_set, ctx.use_mask);
+			if (p) return p->def ? p->def->psz : "";
+		}
+	}
+	if (ctx.subsys) {
+		lval = lookup_macro_exact_no_default(name, ctx.subsys, macro_set, ctx.use_mask);
+		if (lval) return lval;
+
+		if (macro_set.defaults && ! ctx.without_default) {
+			const MACRO_DEF_ITEM * p = find_macro_subsys_def_item(name, ctx.subsys, macro_set, ctx.use_mask);
+			if (p) return p->def ? p->def->psz : "";
+		}
+	}
+
+	// lookup 'name' in the primary macro_set.
+	// Note that if 'name' has been explicitly set to nothing,
+	// lval will _not_ be NULL so we will not call
+	// find_macro_def_item().  See gittrack #1302
+	lval = lookup_macro_exact_no_default(name, macro_set, ctx.use_mask);
+	if (lval) return lval;
+
+	// if not found in the config file, lookup in the param table
+	if (macro_set.defaults && ! ctx.without_default) {
+		const MACRO_DEF_ITEM * p = find_macro_def_item(name, macro_set, ctx.use_mask);
+		if (p && p->def) lval = p->def->psz;
+		if (lval) return lval;
+	}
+
+	// lookup the macro in the given ad, but only if the name prefix matches
+	if (ctx.is_context_ex) {
+		MACRO_EVAL_CONTEXT_EX & ctxx = reinterpret_cast<MACRO_EVAL_CONTEXT_EX &>(ctx);
+		if (ctxx.ad && starts_with_ignore_case(name, ctxx.adname)) {
+			const char * attr = name + strlen(ctxx.adname);
+			ExprTree * expr = ctxx.ad->Lookup(attr);
+			if (expr) {
+				if (ExprTreeIsLiteralString(expr, ctxx.buffer)) {
+					lval = ctxx.buffer.c_str();
+				} else {
+					lval = ExprTreeToString(expr);
+				}
+			}
+		}
+	}
+
+	return lval;
+}
+
+// given the body text of a config macro, and the macro id and macro context
+// evaluate the body and return a string. the string may be a literal, or
+// may point into to the buffer returned in tbuf.  The caller will NOT free
+// the return value, but will free tbuf if it is not NULL with the understanding
+// that the return value may be freed as a result.
+static const char * evaluate_macro_func (
+	const char * func, // can be NULL, or ptr to macro function name terminated by \0 or (
+	int special_id,    // non-zero macro id, must match func if func is supplied
+	char * body, // \0 terminated body of macro - what's inside the (). body may be altered by this function.
+	auto_free_ptr & tbuf, // use this to return a malloc to be auto-free'd by the caller
+	MACRO_SET& macro_set,
+	MACRO_EVAL_CONTEXT & ctx)
+{
+	const char * tvalue = NULL; // return value from evaluating
+	const char * name = body;
+	char * buf = NULL;
+
+	switch (special_id) {
+		case MACRO_ID_NORMAL:
 		{
-			all_done = false;
+			char * pcolon = strchr(body, ':');
+			if (pcolon) { *pcolon++ = 0; }
+#if 1
+			tvalue = lookup_macro(name, macro_set, ctx);
+#else
+			tvalue = lookup_macro(name, subsys, macro_set, use);
+			if (subsys && ! tvalue)
+				tvalue = lookup_macro(name, NULL, macro_set, use);
+
+				// Note that if 'name' has been explicitly set to nothing,
+				// tvalue will _not_ be NULL so we will not call
+				// lookup_macro_def().  See gittrack #1302
+			if ( ! tvalue) {
+				if (use_default_param_table) tvalue = param_default_string(name, subsys);
+				else tvalue = lookup_macro_def(name, subsys, macro_set, use);
+			}
+#endif
+			if (pcolon && ( ! tvalue || ! tvalue[0])) {
+				tvalue = pcolon;
+			}
+			if ( ! tvalue) tvalue = "";
+		}
+		break;
+
+		case SPECIAL_MACRO_ID_ENV:
+		{
 			tvalue = getenv(name);
 			if( tvalue == NULL ) {
 				//EXCEPT("Can't find %s in environment!",name);
 				tvalue = "UNDEFINED";
 			}
-
-			rval = (char *)MALLOC( (unsigned)(strlen(left) + strlen(tvalue) + strlen(right) + 1));
-			ASSERT(rval);
-
-			(void)sprintf( rval, "%s%s%s", left, tvalue, right );
-			FREE( tmp );
-			tmp = rval;
 		}
+		break;
 
-		if (find_special_config_macro("$RANDOM_CHOICE",false,tmp, &left, &name, &right))
+		case SPECIAL_MACRO_ID_RANDOM_CHOICE:
 		{
-			all_done = false;
 			StringList entries(name,",");
 			int num_entries = entries.number();
 			tvalue = NULL;
+			// the the list we are choosing from has only one entry
+			// try and use that entry as a macro name.
+			if (num_entries == 1) {
+				entries.rewind();
+				const char * list_name = entries.next();
+				if ( ! list_name) {
+					EXCEPT( "$RANDOM_CHOICE() config macro: no list!" );
+				}
+
+				const char * lval = lookup_macro(list_name, macro_set, ctx);
+
+				// if the first entry resolved to a macro, clear the entries list and
+				// repopulate it from the value of the macro.
+				if (lval) {
+					entries.clearAll(); list_name = NULL;
+					// now re-populate the entries list from lval.
+					if (strchr(lval, '$')) {
+						char * tmp3 = expand_macro(lval, macro_set, ctx);
+						if (tmp3) {
+							entries.initializeFromString(tmp3);
+							free(tmp3);
+						}
+					} else {
+						entries.initializeFromString(lval);
+					}
+					num_entries = entries.number();
+				} else {
+					// if the lookup failed, fall through to use the the list name as the list item,
+					// we do this for backward compatibility with the original behavior of RANDOM_CHOICE
+				}
+			}
 			if ( num_entries > 0 ) {
 				int rand_entry = (get_random_int() % num_entries) + 1;
 				int i = 0;
@@ -2881,18 +2904,13 @@ expand_macro(const char *value,
 			if( tvalue == NULL ) {
 				EXCEPT("$RANDOM_CHOICE() macro in config file empty!" );
 			}
-
-			rval = (char *)MALLOC( (unsigned)(strlen(left) + strlen(tvalue) +
-											  strlen(right) + 1));
-			(void)sprintf( rval, "%s%s%s", left, tvalue, right );
-			FREE( tmp );
-			tmp = rval;
+			tvalue = buf = strdup(tvalue);
 		}
+		break;
 
-		if (find_special_config_macro("$RANDOM_INTEGER",false,tmp, &left, &name, &right))
+		case SPECIAL_MACRO_ID_RANDOM_INTEGER:
 		{
-			all_done = false;
-			StringList entries(name, ",");
+			StringList entries(body, ",");
 
 			entries.rewind();
 			const char *tmp2;
@@ -2929,55 +2947,483 @@ expand_macro(const char *value,
 				min_value + (get_random_int() % num) * step;
 
 			// And, convert it to a string
-			char	buf[128];
-			snprintf( buf, sizeof(buf)-1, "%ld", random_value );
-			buf[sizeof(buf)-1] = '\0';
-			rval = (char *)MALLOC( (unsigned)(strlen(left) + strlen(buf) +
-											  strlen(right) + 1));
-			ASSERT( rval != NULL );
-			(void)sprintf( rval, "%s%s%s", left, buf, right );
-			FREE( tmp );
-			tmp = rval;
+			const int cbuf = 20;
+			buf = (char*)malloc(cbuf+1);
+			snprintf( buf, cbuf, "%ld", random_value );
+			buf[cbuf] = '\0';
+			tvalue = buf;
 		}
-	#endif // USE_GENERIC_SPECIAL_CONFIG_MACROS
+		break;
 
-		if (find_config_macro(tmp, &left, &name, &right, NULL)) {
-			all_done = false;
-		   #ifdef COLON_DEFAULT_FOR_MACRO_EXPAND
-			char * pcolon = strchr(name, ':');
-			if (pcolon) { *pcolon++ = 0; }
-		   #endif
-			tvalue = lookup_macro(name, subsys, macro_set, use);
-			if (subsys && ! tvalue)
-				tvalue = lookup_macro(name, NULL, macro_set, use);
+			// the $CHOICE() macro comes in 2 forms
+			// $CHOICE(index,list_name) or $CHOICE(index,item1,item2,...)
+			//   index can either be an integer, or the macro name of an integer.
+			//   list_name must be the macro name of a comma separated list of items.
+		case SPECIAL_MACRO_ID_CHOICE:
+		{
+			// use the version of stringlist that doesn't eat empty fields or extra delimiters.
+			StringList entries(body, ',', true);
+			entries.rewind();
 
-				// Note that if 'name' has been explicitly set to nothing,
-				// tvalue will _not_ be NULL so we will not call
-				// lookup_macro_def().  See gittrack #1302
-			#ifdef USE_GENERIC_SPECIAL_CONFIG_MACROS
-			if (use_default_param_table && tvalue == NULL) {
-				tvalue = param_default_string(name, subsys);
-			} else if ( ! tvalue) {
-				tvalue = lookup_macro_def(name, subsys, macro_set, use);
+			const char * index_name = entries.next();
+			if ( ! index_name) {
+				EXCEPT( "$CHOICE() config macro: no index!" );
 			}
-			#else
-			if (use_default_param_table && tvalue == NULL) {
-				tvalue = param_default_string(name, subsys);
-				if (use) { param_default_set_use(name, use, macro_set); }
+			const char * mval = lookup_macro(index_name, macro_set, ctx);
+			if ( ! mval) mval = index_name;
+
+			char * tmp2 = NULL;
+			if (strchr(mval, '$')) {
+				tmp2 = expand_macro(mval, macro_set, ctx);
+				mval = tmp2;
 			}
-			#endif
-		   #ifdef COLON_DEFAULT_FOR_MACRO_EXPAND
-			if (pcolon && ( ! tvalue || ! tvalue[0])) {
-				tvalue = pcolon;
+
+			long long index = -1;
+			if ( ! string_is_long_param(mval, index) || index < 0 || index >= INT_MAX) {
+				EXCEPT( "$CHOICE() macro: %s is invalid index!", mval );
 			}
-		   #endif
-			if( tvalue == NULL ) {
+
+			tvalue = NULL;
+			if (entries.number() == 2) {
+				const char * list_name = entries.next();
+				if ( ! list_name) {
+					EXCEPT( "$CHOICE() config macro: no list!" );
+				}
+
+				const char * lval = lookup_macro(list_name, macro_set, ctx);
+				if ( ! lval) {
+					EXCEPT( "$CHOICE() macro: no list named %s!", list_name);
+				}
+
+				// now populate the entries list from lval.
+				entries.clearAll(); list_name = index_name = NULL;
+				if (strchr(lval, '$')) {
+					char * tmp3 = expand_macro(lval, macro_set, ctx);
+					if (tmp3) {
+						entries.initializeFromString(tmp3);
+						free(tmp3);
+					}
+				} else {
+					entries.initializeFromString(lval);
+				}
+				entries.rewind();
+			}
+
+			// scan the list looking for an item with the given index
+			for (int ii = 0; ii <= (int)index; ++ii) {
+				const char * val = entries.next();
+				if (val != NULL && ii == index) {
+					tvalue = buf = strdup(val);
+					break;
+				}
+			}
+
+			if ( ! tvalue) {
+				EXCEPT( "$CHOICE() config macro: index %d is out of range!", (int)index );
+			}
+
+			if (tmp2) free(tmp2); tmp2 = NULL;
+		}
+		break;
+
+			// $SUBSTR(name,length) or $SUBSTR(name,start,length)
+			// lookup and macro expand name, then extract a substring.
+			// negative length values of length mean 'from the end'
+		case SPECIAL_MACRO_ID_SUBSTR:
+		{
+			char * len_arg = NULL;
+			char * start_arg = strchr(body, ',');
+			if ( ! start_arg) {
+				EXCEPT( "$SUBSTR() macro: no length specified!" );
+			}
+
+			*start_arg++ = 0;
+			len_arg = strchr(start_arg, ',');
+			if (len_arg) *len_arg++ = 0;
+
+			int start_pos = 0;
+			if (start_arg) {
+				const char * arg = lookup_macro(start_arg, macro_set, ctx);
+				if ( ! arg) arg = start_arg;
+
+				char * tmp3 = NULL;
+				if (strchr(arg, '$')) {
+					tmp3 = expand_macro(arg, macro_set, ctx);
+					arg = tmp3;
+				}
+
+				long long index = -1;
+				if ( ! string_is_long_param(arg, index) || index < INT_MIN || index >= INT_MAX) {
+					EXCEPT( "$SUBSTR() macro: %s is invalid start index!", arg );
+				}
+				start_pos = (int)index;
+				if (tmp3) free(tmp3); tmp3 = NULL;
+			}
+
+			int sub_len = INT_MAX/2;
+			if (len_arg) {
+				const char * arg = lookup_macro(len_arg, macro_set, ctx);
+				if ( ! arg) arg = len_arg;
+
+				char * tmp3 = NULL;
+				if (strchr(arg, '$')) {
+					tmp3 = expand_macro(arg, macro_set, ctx);
+					arg = tmp3;
+				}
+
+				long long index = -1;
+				if ( ! string_is_long_param(arg, index) || index < INT_MIN || index > INT_MAX) {
+					EXCEPT( "$SUBSTR() macro: %s is invalid length !", arg );
+				}
+				sub_len = (int)index;
+				if (tmp3) free(tmp3); tmp3 = NULL;
+			}
+
+			const char * mval = lookup_macro(name, macro_set, ctx);
+			if ( ! mval) {
 				tvalue = "";
+			} else {
+				tvalue = NULL;
+
+				if (strchr(mval, '$')) {
+					buf = expand_macro(mval, macro_set, ctx);
+				} else {
+					buf = strdup(mval);
+				}
+
+				int cch = strlen(buf);
+				// a negative starting pos means measure from the end
+				if (start_pos < 0) { start_pos = cch + start_pos; }
+				if (start_pos < 0) { start_pos = 0; }
+				else if (start_pos > cch) { start_pos = cch; }
+
+				tvalue = buf + start_pos;
+				cch -= start_pos;
+
+				// a negative length means measure from the end
+				if (sub_len < 0) { sub_len = cch + sub_len; }
+				if (sub_len < 0) { sub_len = 0; }
+				else if (sub_len > cch) { sub_len = cch; }
+
+				buf[start_pos + sub_len] = 0;
+			}
+		}
+		break;
+
+			// $INT(name) or $INT(name,fmt) or $REAL(name) $REAL(name,fmt)
+			// lookup name, macro expand it if necessary, then evaluate it as a int or double
+			//
+		case SPECIAL_MACRO_ID_INT:
+		case SPECIAL_MACRO_ID_REAL:
+		{
+			char * fmt = strchr(body, ',');
+			if (fmt) {
+				*fmt++ = 0;
+				const char * tmp_fmt = fmt;
+				printf_fmt_info fmt_info;
+				if ( ! parsePrintfFormat(&tmp_fmt, &fmt_info)
+					|| (fmt_info.type == PFT_STRING || fmt_info.type == PFT_RAW || fmt_info.type == PFT_VALUE)
+					|| (fmt_info.type == PFT_FLOAT && (special_id == SPECIAL_MACRO_ID_INT))
+					|| (fmt_info.type == PFT_INT && (special_id == SPECIAL_MACRO_ID_REAL))
+					) {
+					EXCEPT( "%s macro: '%s' is not a valid format specifier!",
+						(special_id == SPECIAL_MACRO_ID_INT) ? "$INT()" : "$REAL()", fmt);
+				}
 			}
 
-			rval = (char *)MALLOC( (unsigned)(strlen(left) + strlen(tvalue) +
-											  strlen(right) + 1));
-			ASSERT( rval != NULL );
+			const char * mval = lookup_macro(name, macro_set, ctx);
+			if ( ! mval) mval = name;
+			tvalue = NULL;
+
+			char * tmp2 = NULL;
+			if (strchr(mval, '$')) {
+				tmp2 = expand_macro(mval, macro_set, ctx);
+				mval = tmp2;
+			}
+
+			if (special_id == SPECIAL_MACRO_ID_INT) {
+				long long int_val = -1;
+				if ( ! string_is_long_param(mval, int_val)) {
+					EXCEPT( "$INT() macro: %s does not evaluate to an integer!", mval );
+				}
+
+				const int cbuf = 56;
+				tvalue = buf = (char*)malloc(cbuf+1);
+				snprintf( buf, cbuf, fmt ? fmt : "%lld", int_val );
+			} else {
+				double dbl_val = -1;
+				if ( ! string_is_double_param(mval, dbl_val)) {
+					EXCEPT( "$REAL() macro: %s does not evaluate to an real!", mval );
+				}
+
+				const int cbuf = 56;
+				tvalue = buf = (char*)malloc(cbuf+1);
+				snprintf( buf, cbuf, fmt ? fmt : "%.16G", dbl_val );
+				if (fmt && ! strchr(buf, '.')) { strcat(buf, ".0"); } // force it to look like a real
+			}
+
+			if (tmp2) free(tmp2); tmp2 = NULL;
+		}
+		break;
+
+			// $STRING(name) or $STRING(name,fmt)
+			// lookup name, macro expand it if necessary, then evaluate it as a string
+			// if it does not evaluate as a string, then just use it as a string literal
+			//
+		case SPECIAL_MACRO_ID_STRING:
+		{
+			char * fmt = strchr(body, ',');
+			if (fmt) {
+				*fmt++ = 0;
+				const char * tmp_fmt = fmt;
+				printf_fmt_info fmt_info;
+				if ( ! parsePrintfFormat(&tmp_fmt, &fmt_info) || fmt_info.type != PFT_STRING) {
+					EXCEPT( "$STRING macro: '%s' is not a valid format specifier!", fmt);
+				}
+			}
+
+			const char * mval = lookup_macro(name, macro_set, ctx);
+			if ( ! mval) mval = name;
+			tvalue = NULL;
+
+			char * tmp2 = NULL;
+			if (strchr(mval, '$')) {
+				tmp2 = expand_macro(mval, macro_set, ctx);
+				mval = tmp2;
+			}
+
+			// now we try to evaluate as a classad expression
+			classad::ExprTree* tree = NULL;
+			if (0 == ParseClassAdRvalExpr(mval, tree, NULL)) {
+				ClassAd rhs;
+				std::string val;
+				std::string attr("CondorString");
+				if ( ! rhs.Insert(attr, tree, false)) {
+					delete tree; tree = NULL;
+				} else if(rhs.EvaluateAttrString(attr, val)) {
+					// value is valid. use it instead of mval
+					if (tmp2) free(tmp2);
+					tmp2 = strdup(val.empty() ? "" : val.c_str());
+					mval = tmp2;
+				}
+			}
+
+			if (fmt) {
+				int cbuf = printf_length(fmt, mval);
+				tvalue = buf = (char*)malloc(cbuf+2);
+				snprintf(buf, cbuf+1, fmt, mval);
+				buf[cbuf] = 0; // make sure of null termination
+			} else {
+				// no format, we just need to make an allocated copy into buf
+				if (tmp2) {
+					// no need to make another copy, just use the tmp2 allocation as the buf allocation
+					tvalue = buf = tmp2;
+					tmp2 = NULL;
+				} else {
+					tvalue = buf = strdup(mval);
+				}
+			}
+
+			if (tmp2) free(tmp2); tmp2 = NULL;
+		}
+		break;
+
+		case SPECIAL_MACRO_ID_EVAL:
+		{
+			const char * mval = lookup_macro(name, macro_set, ctx);
+			if ( ! mval) mval = body;
+			tvalue = NULL;
+
+			char * tmp2 = NULL;
+			if (strchr(mval, '$')) {
+				tmp2 = expand_macro(mval, macro_set, ctx);
+				mval = tmp2;
+			}
+
+			// now we try to evaluate as a classad expression
+			// if it doesn't evaluate, just use it as a string literal
+			std::string tmp3;
+			classad::ExprTree* tree = NULL;
+			if (0 == ParseClassAdRvalExpr(mval, tree, NULL)) {
+				if (ctx.is_context_ex && reinterpret_cast<MACRO_EVAL_CONTEXT_EX&>(ctx).ad) {
+					MACRO_EVAL_CONTEXT_EX &ctxx = reinterpret_cast<MACRO_EVAL_CONTEXT_EX&>(ctx);
+					classad::Value val;
+					ClassAd * ad = const_cast<ClassAd *>(ctxx.ad);
+					if (EvalExprTree(tree, ad, NULL, val)) {
+						if ( ! val.IsStringValue(tmp3)) {
+							classad::ClassAdUnParser unp;
+							tmp3.clear(); // because Unparse appends.
+							unp.Unparse(tmp3, val);
+						}
+						tvalue = buf = strdup(tmp3.c_str());
+					}
+				} else {
+					ClassAd rhs;
+					classad::Value val;
+					if (EvalExprTree(tree, &rhs, NULL, val)) {
+						if ( ! val.IsStringValue(tmp3)) {
+							classad::ClassAdUnParser unp;
+							tmp3.clear(); // because Unparse appends.
+							unp.Unparse(tmp3, val);
+						}
+						tvalue = buf = strdup(tmp3.c_str());
+					}
+				}
+			}
+
+			// if we don't have a value, we can use the macro expanded buffer
+			// as the value, if we don't have one of those, use the literal ""
+			if ( ! tvalue) {
+				if (tmp2) { tvalue = buf = tmp2; tmp2 = NULL; }
+				else { tvalue = ""; }
+			}
+			if (tmp2) free(tmp2); tmp2 = NULL;
+		}
+		break;
+
+		case SPECIAL_MACRO_ID_DIRNAME:
+		case SPECIAL_MACRO_ID_BASENAME:
+		case SPECIAL_MACRO_ID_FILENAME:
+		{
+			const char * mval = lookup_macro(name, macro_set, ctx);
+			tvalue = NULL;
+
+			// filename extraction macros, for expanding only parts of a filename in $(FILE).
+			// Any macro function of the form $Fqdpnx(FILE), where q,d,p,n,x are all optional
+			// and indicate which parts of the filename to keep.
+			// f - convert to full path first
+			// q - quote the result (incoming quotes are stripped if this is not specified)
+			// a - quote style is for Arguments (i.e single quotes, not double quotes)
+			// d - parent directory
+			// p - full directory path
+			// n - file basename without extension
+			// x - file extension, including the .
+			// b - bare - strip trailing / for p and d, leading . for x
+
+			int parts = 0;
+			bool quoted = false;
+			bool full_path = false;
+			bool windows_path = false;
+			bool bare = false;
+			bool arg_quote = false;
+			if (special_id == SPECIAL_MACRO_ID_BASENAME) {
+				parts = 1|2;
+			} else if (special_id == SPECIAL_MACRO_ID_DIRNAME) {
+				parts = 4;
+			} else {
+				const char*p = func;
+				if (*p == 'F') ++p;
+				for (; *p != '('; ++p) {
+					switch (*p | 0x20) {
+					case 'x': parts |= 0x1; break;
+					case 'n': parts |= 0x2; break;
+					case 'p': parts |= 0x4; break;
+					case 'd': parts |= 0x8; break;
+					case 'a': arg_quote = true; break;
+					case 'b': bare = true; break;
+					case 'f': full_path = true; break;
+					case 'w': windows_path = true; break;
+					case 'q': quoted = true; break;
+					}
+				}
+			}
+
+			if (mval) {
+				char quote_char = quoted ? (arg_quote ? '\'' : '"') : 0;
+				int cchum = 0;
+				const char * umval = strlen_unquote(mval, cchum);
+				if (full_path) {
+					buf = strdup_full_path_quoted(umval, cchum, ctx, quote_char, windows_path);
+				} else {
+					buf = strdup_quoted(umval, cchum, quote_char);  // copy the macro value with quotes add/removed as requested.
+				}
+
+				int ixend = strlen(buf); // this will be the end of what we wish to return
+				int ixn = (int)(condor_basename(buf) - buf); // index of start of filename, ==0 if no path sep
+				int ixx = (int)(condor_basename_extension_ptr(buf+ixn) - buf); // index of . in extension, ==ixend if no ext
+				// if this is a bare filename, we can ignore the p & d flags if n or x is set
+				if ( ! ixn) { if (parts & (2|1)) parts &= ~(4|8); }
+
+				// set tvalue to start, and ixend to end of text we want to return.
+				switch (parts & 0xF)
+				{
+				case 1:     tvalue = buf+ixx; if (bare && (ixx < ixend)) ++tvalue; break;
+				case 2|1:   tvalue = buf+ixn;  break;
+				case 2:     tvalue = buf+ixn;  ixend = ixx; break;
+				case 0:
+				case 4|2|1: tvalue = buf;      break;
+				case 4|1:   tvalue = buf;      break; // TODO: fix to strip out filename part?
+				case 4:     tvalue = buf; ixend = ixn; if (bare && ixn > 0) ixend = ixn-1; break;
+				case 4|2:   tvalue = buf; ixend = ixx; break;
+				default:
+					// ixn is 0 if no dir.
+					if (ixn > 0) {
+						PRAGMA_REMIND("handle multiple d's")
+						char ch = buf[ixn-1]; buf[ixn-1] = 0; // truncate filename saving the old character
+						tvalue = condor_basename(buf); // tvalue now points to the start of the first directory
+						buf[ixn-1] = ch; // put back the dir/filename separator
+						if (2 == (parts&3)) { ixend = ixx; }
+						else if (0 == (parts&3)) { ixend = ixn; if (bare && ixn > 0) ixend = ixn-1; }
+						else if (1 == (parts&3)) { /* TODO: strip out filename part? */ }
+					} else {
+						// we get here when there is no dir, but only dir should be output
+						// so we pick a spot inside the buffer with room to quote
+						// and set start==end
+						ixend = 1;
+						tvalue = buf+ixend;
+					}
+				break;
+				}
+
+				// we may have truncated quotes in the switch statement above
+				// but if we did we know that buf has room to put them back.
+				if (quoted) {
+					int ixv = (int)(tvalue-buf);
+					if (buf[ixv] != quote_char) { ASSERT(ixv > 0); buf[--ixv] = quote_char; tvalue = buf+ixv; }
+					if (ixend > 1 && buf[ixend-1] == quote_char) --ixend;
+					buf[ixend++] = quote_char;
+				}
+				// make sure that the end of tvalue is null terminated.
+				buf[ixend] = 0;
+			}
+			if ( ! tvalue) tvalue = "";
+		}
+		break;
+
+		default:
+			EXCEPT("Unknown special config macro %d!", special_id);
+		break;
+	}
+
+	tbuf.set(buf);
+	return tvalue;
+}
+
+char *
+expand_macro(const char *value,
+			 MACRO_SET& macro_set,
+			 MACRO_EVAL_CONTEXT & ctx)
+{
+	char *tmp = strdup( value );
+	char *left, *name, *right, *func;
+	const char *tvalue;
+	char *rval;
+
+	bool all_done = false;
+	while ( ! all_done) { // loop until all done expanding
+		all_done = true;
+
+		NoDollarBody no_dollar; // prevents $(DOLLAR) from being matched by next_config_macro
+		int special_id = next_config_macro(is_config_macro, no_dollar, tmp, 0, &left, &name, &right, &func);
+		if (special_id) {
+			all_done = false;
+
+			auto_free_ptr tbuf; // malloc or strdup'd buffer (if needed)
+			tvalue = evaluate_macro_func(func, special_id, name, tbuf, macro_set, ctx);
+
+			rval = (char *)MALLOC( (unsigned)(strlen(left) + strlen(tvalue) + strlen(right) + 1));
+			ASSERT(rval);
+
 			(void)sprintf( rval, "%s%s%s", left, tvalue, right );
 			FREE( tmp );
 			tmp = rval;
@@ -2985,7 +3431,8 @@ expand_macro(const char *value,
 	}
 
 	// Now, deal with the special $(DOLLAR) macro.
-	while( find_config_macro(tmp, &left, &name, &right, DOLLAR_ID) ) {
+	DollarOnlyBody dollar_only; // matches only $(DOLLAR)
+	while( next_config_macro(is_config_macro, dollar_only, tmp, 0, &left, &name, &right, &func) ) {
 		rval = (char *)MALLOC( (unsigned)(strlen(left) + 1 +
 										  strlen(right) + 1));
 		ASSERT( rval != NULL );
@@ -2994,9 +3441,110 @@ expand_macro(const char *value,
 		tmp = rval;
 	}
 
+	return tmp;
+}
+
+
+// MACRO self expansion ----
+class SelfOnlyBody : public ConfigMacroBodyCheck {
+public:
+	SelfOnlyBody(const char * _self, int _len) : self(_self), self2(NULL), selflen(_len), selflen2(0) {}
+	virtual bool skip(int func_id, const char * name, int namelen) {
+		if (func_id != MACRO_ID_NORMAL && func_id != SPECIAL_MACRO_ID_FILENAME)
+			return true;
+		if (namelen == selflen && MATCH == strncasecmp(name, self, namelen))
+			return false;
+		if (namelen == selflen2 && MATCH == strncasecmp(name, self2, namelen))
+			return false;
+		return true;
+	}
+	void set_self2(const char *_self2, int _len2) { self2 = _self2; selflen2 = _len2; }
+protected:
+	const char * self;
+	const char * self2;
+	int selflen;
+	int selflen2;
+};
+
+/*
+** Special version of expand_macro that only expands 'self' references. i.e. it only
+** expands the macro whose name is specified in the self argument.
+** Expand parameter references of the form "left$(self)right".  This
+** is deceptively simple, but does handle multiple and or nested references.
+** We only expand references to to the parameter specified by self. use expand_macro
+** to expand all references. 
+*/
+char *
+expand_self_macro(const char *value,
+				 const char *self,
+				 MACRO_SET& macro_set,
+				 MACRO_EVAL_CONTEXT & ctx)
+{
+	char *tmp = strdup( value );
+	char *rval;
+
+	ASSERT(self != NULL && self[0] != 0);
+
+	SelfOnlyBody only_self(self, strlen(self));
+
+	// to avoid infinite recursive expansion, we have to look for both "prefix.self" and "self"
+	// so we want to set selfless equal to the part of self after the prefix.
+	const char * prefix = NULL;
+	if (ctx.localname) {
+		const char * a = ctx.localname;
+		const char * b = self;
+		while (*a && (tolower(*a) == tolower(*b))) {
+			++a; ++b;
+		}
+		// if a now points to a 0, and b now points to ".", then self contains subsys as a prefix.
+		if (0 == a[0] && '.' == b[0] && b[1] != 0) {
+			const char *selfless = b+1;
+			only_self.set_self2(selfless, strlen(selfless));
+			prefix = ctx.localname;
+		}
+	}
+	if (ctx.subsys && ! prefix) {
+		const char * a = ctx.subsys;
+		const char * b = self;
+		while (*a && (tolower(*a) == tolower(*b))) {
+			++a; ++b;
+		}
+		// if a now points to a 0, and b now points to ".", then self contains subsys as a prefix.
+		if (0 == a[0] && '.' == b[0] && b[1] != 0) {
+			const char *selfless = b+1;
+			only_self.set_self2(selfless, strlen(selfless));
+			prefix = ctx.subsys;
+		}
+	}
+
+	bool all_done = false;
+	while( !all_done ) { // loop until all done expanding
+		all_done = true;
+
+		char *left, *body, *right, *func;
+		const char *tvalue;
+
+		int func_id = next_config_macro(is_config_macro, only_self, tmp, 0, &left, &body, &right, &func);
+		if (func_id) {
+			all_done = false;
+
+			auto_free_ptr tbuf; // malloc or strdup'd buffer (if needed)
+			tvalue = evaluate_macro_func(func, func_id, body, tbuf, macro_set, ctx);
+
+			rval = (char *)MALLOC( (unsigned)(strlen(left) + strlen(tvalue) + strlen(right) + 1));
+			ASSERT(rval);
+
+			(void)sprintf( rval, "%s%s%s", left, tvalue, right );
+			FREE( tmp );
+			tmp = rval;
+		}
+	}
+
 	return( tmp );
 }
 
+
+// param hashtable iteration
 
 bool hash_iter_done(HASHITER& it) {
 	// the first time this is called, so some setup
@@ -3101,27 +3649,63 @@ int hash_iter_used_value(HASHITER& it) {
 };
 
 
-#ifdef USE_GENERIC_SPECIAL_CONFIG_MACROS
+/** Find next $(MACRO) $func(MACRO), $$(MACRO) or $$([expression])
+	search begins at pos and continues to terminating null
+
+  check_prefix callback determins with values between $ and ( are permitted
+  and converts them into a prefix id which will be the return value of
+  the function.  the check_prefix should return 0 if the characters
+  between $ and ( are not a valid function
+
+  body_check is a class. this skip method of this class is is passed a
+  pointer to the start of the $() body and the length, it should return
+  true if the contents of the body should cause this $() macro to be skipped
+  during this pass.  This is used to match only $(self) or $(DOLLAR) during
+  certain passes and to ignore $$() and $(DOLLAR) during other passes.
+
+- value - The null-terminated string to scan. WILL BE MODIFIED!
+
+- pos - 0-indexed position in value to start scanning at.
+
+- leftp - OUTPUT. *leftp will be set to value+search_pos.  It
+	will be null terminated at the first $ for the next $$(MACRO) found.
+
+- namep - OUTPUT. The name of the MACRO (the bit between the
+	parenthesis).  Pointer into value.  Null terminated at the
+	closing parenthesis.
+
+- rightp - OUTPUT. Everything to the right of the close paren for the $$(MACRO).
+	Pointer into value.
+
+- funcp - OUTPUT. points to the char after the first $ of the $( $func( or $$ macro.
+	Pointer into value, it is NOT null terminated.
+
+  returns a non-zero macro prefix (function) id if an appropriate $ or $$ macro is found
+  returns zero if not found.
+*/
 
 /*
-** Same as find_config_macro() below, but finds special references like $ENV().
+** Same as find_config_macro() below, but finds special references like $ENV() as well
+** depending on what check_prefix returns when handed the characters between $ and (
 */
-int next_special_config_macro (
-	int (*check_prefix)(const char *dollar, int length, bool & idchar_only),
-	char *value,
-	char **leftp, char **namep, char **rightp,  char**dollar )
+int next_config_macro (
+	int (*check_prefix)(const char *dollar, int length, MACRO_BODY_CHARS & bodychars),
+	ConfigMacroBodyCheck & body_check,
+	char *value, int search_pos,
+	char **leftp, char **namep, char **rightp,  char**funcp )
 {
 	char *left, *left_end, *name, *right;
 	char *tvalue;
 	int prefix_len;
 	int prefix_id = 0;
+	int after_colon = 0; // if : default is allowed, keeps track of the offset of the : from the start of the macro.
 
 	if ( ! check_prefix ) return 0;
 
-	tvalue = value;
+	tvalue = value + search_pos;
 	left = value;
 
-	bool only_id_chars = false;
+	MACRO_BODY_CHARS bodychars = MACRO_BODY_ANYTHING;
 
 		// Loop until we're done, helped with the magic of goto's
 	for (;;) {
@@ -3130,34 +3714,22 @@ tryagain:
 		// prefix_id to the identifier, and prefix_len to it's length.
 		prefix_len = 0;
 		if (tvalue) {
-			// scan for $anyalphanumtext( and then check to see 
+			// scan for $anyalphanumtext( or $$( and then check to see 
 			// if it's a valid prefix. keep scanning til we find a prefix
 			// or get to the end of the input.
 			for (;;) {
 				value = strchr(tvalue, '$');
 				if ( ! value) return 0;
-
-				// skip over $$
-				if (value[1] == '$') {
-					tvalue = value+2;
-					continue;
-				}
-
-				// for a valid prefix, first char after $ must be alpha
 				char * p = value+1;
-				if ( ! isalpha(*p)) {
-					tvalue = p;
-					continue;
-				}
-				++p;
+				if (*p == '$') ++p; // permit $$ as well as $ as part of the prefix
 
 				// scan over alphanumeric characters, then if the next character is (
 				// we have a potential prefix - call check_prefix to find out.
 				while (*p && (isalnum(*p) || *p == '_')) ++p;
 				if (*p == '(') {
 					prefix_len = (int)(p - value);
-					prefix_id = check_prefix(value, prefix_len, only_id_chars);
-					if (prefix_id > 0)
+					prefix_id = check_prefix(value, prefix_len, bodychars);
+					if (prefix_id != 0)
 						break;
 				}
 				tvalue = p;
@@ -3171,15 +3743,52 @@ tryagain:
 		if( *value == '(' ) {
 			left_end = value - prefix_len;
 			name = ++value;
-			while( *value && *value != ')' ) {
-				char c = *value++;
-				if( !ISIDCHAR(c) && only_id_chars ) {
-					tvalue = name;
+			if (bodychars == MACRO_BODY_ANYTHING) {
+				while( *value && *value != ')' ) { ++value; }
+			} else if (bodychars == MACRO_BODY_IDCHAR_COLON || bodychars == MACRO_BODY_META_ARG) {
+				bool is_meta_arg_body = (bodychars == MACRO_BODY_META_ARG);
+				after_colon = 0;
+				while( *value && *value != ')' ) {
+					char c = *value++;
+					if (c == ':' && ! after_colon) {
+						after_colon = (int)(value - name);
+						continue;
+					} else if (after_colon) {
+						if (c == '(') {
+							// skip to the close )
+							char * ptr = strchr(value, ')');
+							if (ptr) value = ptr+1;
+						} else if (strchr("$ ,\\", c)) {
+							// allow some characters after the : that we don't allow in param names
+							continue;
+						}
+					}
+					if (is_meta_arg_body) {
+						if ( ! isdigit(c) && c != '?' && c != '#' && c != '+') {
+							tvalue = name;
+							goto tryagain;
+						}
+					} else {
+						if ( ! ISIDCHAR(c)) {
+							tvalue = name;
+							goto tryagain;
+						}
+					}
+				}
+			} else if (bodychars == MACRO_BODY_SCAN_BRACKET) {
+				char * end_marker = strstr(value, "])");
+				if (end_marker == NULL) {
+					tvalue = value;
 					goto tryagain;
 				}
+				value = end_marker + 1;
 			}
 
 			if( *value == ')' ) {
+				if (body_check.skip(prefix_id, name, (int)(value-name))) {
+					tvalue = value; // skip over the whole body
+					goto tryagain;
+				}
 				right = value;
 				break;
 			} else {
@@ -3195,281 +3804,61 @@ tryagain:
 	*left_end = '\0';
 	*right++ = '\0';
 
-	*dollar = left_end+1;
+	*funcp = left_end+1;
 	*leftp = left;
 	*namep = name;
 	*rightp = right;
 
 	return prefix_id;
 }
-#else
-/*
-** Same as find_config_macro() below, but finds special references like $ENV().
+
+/** Find next $$(MACRO) or $$([expression]) in value
+	search begins at pos and continues to terminating null
+
+- value - The null-terminated string to scan. WILL BE MODIFIED!
+
+- pos - 0-indexed position in value to start scanning at.
+
+- left - OUTPUT. *leftp will be set to value+search_pos.  It
+	will be null terminated at the first $ for the next $$(MACRO) found.
+
+- name - OUTPUT. The name of the MACRO (the bit between the
+	parenthesis).  Pointer into value.  Null terminated at the
+	closing parenthesis.
+
+- right - OUTPUT. Everything to the right of the close paren for the $$(MACRO).
+	Pointer into value.
+
+returns non-zero if a $$() is found, zero if not found.
 */
-extern "C" int
-find_special_config_macro( const char *prefix, bool only_id_chars, register char *value, 
-		register char **leftp, register char **namep, register char **rightp )
+
+static int is_dollardollar_prefix(const char* prefix, int length, MACRO_BODY_CHARS & bodychars)
 {
-	char *left, *left_end, *name, *right;
-	char *tvalue;
-	int prefix_len;
-
-	if ( prefix == NULL ) {
-		return( 0 );
+	// prefix of just "$$" is dollardollar macro expansion. 
+	if (length == 2 && prefix[1] == '$') {
+		bodychars = (prefix[3] == '[') ? MACRO_BODY_SCAN_BRACKET : MACRO_BODY_IDCHAR_COLON;
+		return MACRO_ID_DOUBLEDOLLAR;
 	}
-
-	prefix_len = strlen(prefix);
-	tvalue = value;
-	left = value;
-
-		// Loop until we're done, helped with the magic of goto's
-	while (1) {
-tryagain:
-		if (tvalue) {
-			value = const_cast<char *>(strstr(tvalue, prefix) );
-		}
-		
-		if( value == NULL ) {
-			return( 0 );
-		}
-
-		value += prefix_len;
-		if( *value == '(' ) {
-			left_end = value - prefix_len;
-			name = ++value;
-			while( *value && *value != ')' ) {
-				char c = *value++;
-				if( !ISIDCHAR(c) && only_id_chars ) {
-					tvalue = name;
-					goto tryagain;
-				}
-			}
-
-			if( *value == ')' ) {
-				right = value;
-				break;
-			} else {
-				tvalue = name;
-				goto tryagain;
-			}
-		} else {
-			tvalue = value;
-			goto tryagain;
-		}
-	}
-
-	*left_end = '\0';
-	*right++ = '\0';
-
-	*leftp = left;
-	*namep = name;
-	*rightp = right;
-
-	return( 1 );
-}
-#endif
-
-/* Docs are in /src/condor_includes/condor_config.h */
-extern "C" int
-find_config_macro( register char *value, register char **leftp, 
-		 register char **namep, register char **rightp,
-		 const char *self,
-		 bool getdollardollar, int search_pos)
-{
-	char *left, *left_end, *name, *right;
-	char *tvalue;
-   #ifdef COLON_DEFAULT_FOR_MACRO_EXPAND
-	int after_colon = 0; // records the offset of the : from the start of the macro
-   #endif
-
-	tvalue = value + search_pos;
-	left = value;
-
-	for(;;) {
-tryagain:
-		if (tvalue) {
-			value = const_cast<char *>( strchr(tvalue, '$') );
-		}
-		
-		if( value == NULL ) {
-			return( 0 );
-		}
-
-			// Do not treat $$(foo) as a macro unless
-			// getdollardollar = true.  This is for
-			// condor_submit, so it does not try to expand
-			// macros when we do "executable = foo.$$(arch)"
-			// If getdollardollar is true, than only get
-			// macros with two dollar signs, i.e. $$(foo).
-		if ( getdollardollar ) {
-			if ( *++value != '$' ) {
-				// this is not a $$ macro
-				tvalue = value;
-				goto tryagain;
-			}
-		} else {
-			// here getdollardollar is false, so ignore
-			// any $$(foo) macro.
-			if ( (*(value + sizeof(char))) == '$' ) {
-				value++; // skip current $
-				value++; // skip following $
-				tvalue = value;
-				goto tryagain;
-			}
-		}
-
-		if( *++value == '(' ) {
-			if( getdollardollar && *value != '\0' && value[1] == '[' ) {
-
-				// This is a classad expression to be evaled.  This layer
-				// doesn't need any intelligence, just scan for "])" which
-				// terminates it.  If we get to end of string without finding
-				// the terminating pattern, this $$ match fails, try again.
-
-				char * end_marker = strstr(value, "])");
-				if( end_marker == NULL ) {
-					tvalue = value;
-					goto tryagain;
-				}
-
-				left_end = value - 2;
-				name = ++value;
-				right = end_marker + 1;
-				break;
-
-			} else { 
-
-				// This might be a "normal" values $(FOO), $$(FOO) or
-				// $$(FOO:Bar) Skim until ")".  We only allow valid characters
-				// inside (basically alpha-numeric. $$ adds ":"); a non-valid
-				// character means this $$ match fails.  End of string before
-				// ")" means this match fails, try again.
-
-				if ( getdollardollar ) {
-					left_end = value - 2;
-				} else {
-					left_end = value - 1;
-				}
-				name = ++value;
-			   #ifdef COLON_DEFAULT_FOR_MACRO_EXPAND
-				after_colon = 0;
-			   #endif
-				while( *value && *value != ')' ) {
-					char c = *value++;
-				   #ifdef COLON_DEFAULT_FOR_MACRO_EXPAND
-					if ( ! after_colon && c == ':') {
-						after_colon = (int)(value - name);
-					} else if (after_colon) {
-						if (c == '(') {
-							// skip ahead past the close )
-							char * ptr = strchr(value, ')');
-							if (ptr) value = ptr+1;
-							continue;
-						} else if (strchr("$ ,\\", c)) {
-							// allow some characters after the : that we don't allow in param names
-							continue;
-						}
-					}
-					if( !ISDDCHAR(c) ) {
-						tvalue = name;
-						goto tryagain;
-					}
-				   #else
-					if( getdollardollar ) {
-						if( !ISDDCHAR(c) ) {
-							tvalue = name;
-							goto tryagain;
-						}
-					} else {
-						if( !ISIDCHAR(c) ) {
-							tvalue = name;
-							goto tryagain;
-						}
-					}
-				   #endif
-				}
-
-				if( *value == ')' ) {
-					// We pass (value-name) to strncmp since name contains
-					// the entire line starting from the identifier and value
-					// points to the end of the identifier.  Thus, the difference
-					// between these two pointers gives us the length of the
-					// identifier.
-					int namelen = value-name;
-				   #ifdef COLON_DEFAULT_FOR_MACRO_EXPAND
-					if (after_colon) namelen = after_colon-1;
-				   #endif
-					if( !self || ( strncasecmp( name, self, namelen ) == MATCH && self[namelen] == '\0' ) ) {
-							// $(DOLLAR) has special meaning; it is
-							// set to "$" and is _not_ recursively
-							// expanded.  To implement this, we have
-							// find_config_macro() ignore $(DOLLAR) and we then
-							// handle it in expand_macro().
-							// Note that $$(DOLLARDOLLAR) is handled a little
-							// differently.  Instead of skipping over it,
-							// we treat it like anything else, and it is up
-							// to the caller to advance search_pos, so we
-							// don't run into the literal $$ again.
-						if ( !self && namelen == DOLLAR_ID_LEN &&
-								strncasecmp(name,DOLLAR_ID,namelen) == MATCH ) {
-							tvalue = name;
-							goto tryagain;
-						}
-						right = value;
-						break;
-					} else {
-						tvalue = name;
-						goto tryagain;
-					}
-				} else {
-					tvalue = name;
-					goto tryagain;
-				}
-			}
-		} else {
-			tvalue = value;
-			goto tryagain;
-		}
-	}
-
-	*left_end = '\0';
-	*right++ = '\0';
-
-	*leftp = left;
-	*namep = name;
-	*rightp = right;
-
-	return( 1 );
+	return 0; // not a $$ macro
 }
 
-/*
-** Return the value associated with the named parameter.  Return NULL
-** if the given parameter is not defined.
-*/
-const char * lookup_macro_exact(const char *name, MACRO_SET & set, int use)
-{
-	MACRO_ITEM* pitem = find_macro_item(name, set);
-	if (pitem) {
-		if (set.metat) {
-			MACRO_META* pmeta = &set.metat[pitem - set.table];
-			pmeta->use_count += (use&1);
-			pmeta->ref_count += (use>>1)&1;
-		}
-		return pitem->raw_value;
+class DollarDollarBody : public ConfigMacroBodyCheck {
+public:
+	virtual bool skip(int /*func_id*/, const char * /*body*/, int /*len*/) {
+		// no special skippable bodies
+		return false;
 	}
-	return NULL;
+};
+
+
+int next_dollardollar_macro(char * value, int pos, char** left, char** name, char** right)
+{
+	char * func;
+	DollarDollarBody dollardollar_body; // prevents $(DOLLAR) from being matched by next_config_macro
+	int id = next_config_macro(is_dollardollar_prefix, dollardollar_body, value, pos, left, name, right, &func);
+	return id ? 1 : 0;
 }
 
-const char * lookup_macro(const char *name, const char *prefix, MACRO_SET & set, int use)
-{
-	MyString prefixed_name;
-	if (prefix) {
-		// snprintf(tmp_name, MAX_PARAM_LEN, "%s.%s", prefix, name);
-		prefixed_name.formatstr("%s.%s", prefix, name);
-		name = prefixed_name.Value();
-	}
-	return lookup_macro_exact(name, set, use);
-}
 
 template <typename T>
 int BinaryLookupIndex (const T aTable[], int cElms, const char * key, int (*fncmp)(const char *, const char *))
@@ -3515,41 +3904,63 @@ void param_default_set_use(const char * name, int use, MACRO_SET & set)
 	}
 }
 
-const char * lookup_macro_def(const char * name, const char * subsys, MACRO_SET & set, int use)
+
+const MACRO_DEF_ITEM * find_macro_subsys_def_item(const char * name, const char * subsys, MACRO_SET & set, int use)
 {
 	MACRO_DEF_ITEM * p = NULL;
-
 	// if subsys was passed, first try to lookup in param subsystem overrides table.
-	if (subsys && set.defaults && set.defaults->table) {
+	if (set.defaults && set.defaults->table) {
 		MACRO_DEF_ITEM * pSubTab = NULL;
 		int cSubTab = param_get_subsys_table(set.defaults->table, subsys, &pSubTab);
 		if (cSubTab && pSubTab) {
 			int ix = BinaryLookupIndex<const MACRO_DEF_ITEM>(pSubTab, cSubTab, name, strcasecmp);
 			if (ix >= 0) {
 				p = pSubTab + ix;
+				if (use) param_default_set_use(name, use, set); 
 			}
 		}
 	}
-
-	// if not found in the subsystem's table, or if we need to set useage counts
-	// lookup in the defaults table.
-	if ( ! p || use) {
-		int ix = param_default_get_index(name, set);
-		if (ix >= 0) {
-			if (use && set.defaults && set.defaults->metat) {
-				set.defaults->metat[ix].use_count += (use&1);
-				set.defaults->metat[ix].ref_count += (use>>1)&1;
-			}
-			if ( ! p && set.defaults && set.defaults->table) {
-				p = &set.defaults->table[ix];
-			}
-		}
-	}
-
-	if (p && p->def) {
-		return p->def->psz;
-	}
-	return NULL;
+	return p;
 }
 
+const MACRO_DEF_ITEM * find_macro_def_item(const char * name, MACRO_SET & set, int use)
+{
+	MACRO_DEF_ITEM * p = NULL;
+
+	// if name has a dot in it, then this MIGHT be a subsys.name lookup
+	// so try looking up name in the subsys default table. (the lookup with only compare up to the .)
+	// if a subsys table is found, then try lookup up the remaineder of the name in that table
+	// note that this type of lookup will always fail in the submit macro set.
+	const char * pdot = strchr(name, '.');
+	if (pdot) {
+		MACRO_DEF_ITEM * pSubTab = NULL;
+		const char * subsys = name; // no need to null terminate the subsys prefix
+		int cSubTab = param_get_subsys_table(set.defaults->table, subsys, &pSubTab);
+		if (cSubTab && pSubTab) {
+			int ix = BinaryLookupIndex<const MACRO_DEF_ITEM>(pSubTab, cSubTab, pdot+1, strcasecmp);
+			if (ix >= 0) {
+				p = pSubTab + ix;
+				if (use) param_default_set_use(pdot+1, use, set); 
+				return p;
+			}
+		}
+	}
+
+	// if we get here, there was no . in the name, or the subsys lookup failed
+	// we expect to always end up here for the submit macro set, but not always for
+	// the config macro set.
+
+	// do an exact match lookup of the name in the main defaults table.
+	int ix = param_default_get_index(name, set);
+	if (ix >= 0) {
+		if (use && set.defaults && set.defaults->metat) {
+			set.defaults->metat[ix].use_count += (use&1);
+			set.defaults->metat[ix].ref_count += (use>>1)&1;
+		}
+		if (set.defaults && set.defaults->table) {
+			p = &set.defaults->table[ix];
+		}
+	}
+	return p;
+}
 

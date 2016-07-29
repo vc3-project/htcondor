@@ -37,7 +37,7 @@
 #include "condor_netdb.h"
 #include "condor_claimid_parser.h"
 #include "misc_utils.h"
-#include "ConcurrencyLimitUtils.h"
+#include "NegotiationUtils.h"
 #include "MyString.h"
 #include "condor_daemon_core.h"
 #include "selector.h"
@@ -2452,7 +2452,14 @@ Matchmaker::forwardAccountingData(std::set<std::string> &names) {
 				SetTargetTypeName(updateAd, "none");
 
 				DCCollectorAdSequences seq; // Don't need them, interface requires them
-				collector.sendUpdate(UPDATE_ACCOUNTING_AD, &updateAd, seq, NULL, false);
+				int resUsed = -1;
+
+				// If flocking submitters aren't running here, ResourcesUsed
+				// will be zero.  Don't include those submitters.
+
+				if (updateAd.LookupInteger("ResourcesUsed", resUsed)) {
+					collector.sendUpdate(UPDATE_ACCOUNTING_AD, &updateAd, seq, NULL, false);
+				}
 			}
 		}
 		forwardGroupAccounting(collector, hgq_root_group);
@@ -3527,6 +3534,10 @@ obtainAdsFromCollector (
                 dprintf(D_ALWAYS, "WARNING: ignoring submitter ad with no name and/or address\n");
                 continue;
             }
+			if ( !IsValidSubmitterName( subname.c_str() ) ) {
+				dprintf( D_ALWAYS, "WARNING: ignoring submitter ad with invalid name: %s\n", subname.c_str() );
+				continue;
+			}
 
             int numidle=0;
             ad->LookupInteger(ATTR_IDLE_JOBS, numidle);
@@ -4715,6 +4726,7 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 	double			candidatePostJobRankValue;
 	double			candidatePreemptRankValue;
 	PreemptState	candidatePreemptState;
+	string			candidateDslotClaims;
 		// to store the best candidate so far
 	ClassAd 		*bestSoFar = NULL;	
 	ClassAd 		*cached_bestSoFar = NULL;	
@@ -4723,6 +4735,7 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 	double			bestPostJobRankValue = -(FLT_MAX);
 	double			bestPreemptRankValue = -(FLT_MAX);
 	PreemptState	bestPreemptState = (PreemptState)-1;
+	string			bestDslotClaims;
 	bool			newBestFound;
 		// to store results of evaluations
 	string remoteUser;
@@ -4768,7 +4781,7 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 	{
 		// we can use cached information.  pop off the best
 		// candidate from our sorted list.
-		while( (cached_bestSoFar = MatchList->pop_candidate()) ) {
+		while( (cached_bestSoFar = MatchList->pop_candidate(candidateDslotClaims)) ) {
 			if (evaluate_limits_with_match) {
 				std::string limits;
 				if (request.EvalString(ATTR_CONCURRENCY_LIMITS, cached_bestSoFar, limits)) {
@@ -4806,6 +4819,9 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 				rejPreemptForRank,
 				rejForSubmitterLimit);
 		}
+		if ( cached_bestSoFar && !candidateDslotClaims.empty() ) {
+			cached_bestSoFar->Assign("PreemptDslotClaims", candidateDslotClaims);
+		}
 			//  TODO  - compare results, reserve net bandwidth
 		return cached_bestSoFar;
 	}
@@ -4840,6 +4856,8 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 	rejPreemptForRank = 0;
 	rejForSubmitterLimit = 0;
 
+	bool allow_pslot_preemption = param_boolean("ALLOW_PSLOT_PREEMPTION", false);
+
 	// scan the offer ads
 	startdAds.Open ();
 	while ((candidate = startdAds.Next ())) {
@@ -4849,7 +4867,7 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 			dPrintAd(D_MACHINE, *candidate);
 		}
 
-		if ( param_boolean( "ALLOW_PSLOT_PREEMPTION", false ) ) {
+		if ( allow_pslot_preemption ) {
 			bool is_dslot = false;
 			candidate->LookupBool( ATTR_SLOT_DYNAMIC, is_dslot );
 			if ( is_dslot ) {
@@ -4883,12 +4901,13 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
             cp_restore_requested(request, consumption);
         }
 
+		candidateDslotClaims.clear();
 		bool pslotRankMatch = false;
 		if (!is_a_match && ConsiderPreemption) {
 			bool jobWantsMultiMatch = false;
 			request.LookupBool(ATTR_WANT_PSLOT_PREEMPTION, jobWantsMultiMatch);
 			if (param_boolean("ALLOW_PSLOT_PREEMPTION", false) && jobWantsMultiMatch) {
-				is_a_match = pslotMultiMatch(&request, candidate, preemptPrio);
+				is_a_match = pslotMultiMatch(&request, candidate, preemptPrio, candidateDslotClaims);
 				pslotRankMatch = is_a_match;
 			}
 		}
@@ -4913,13 +4932,17 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 
 		candidatePreemptState = NO_PREEMPTION;
 
-		remoteUser = "";
+		remoteUser.clear();
 			// If there is already a preempting user, we need to preempt that user.
 			// Otherwise, we need to preempt the user who is running the job.
-		if (!candidate->LookupString(ATTR_PREEMPTING_ACCOUNTING_GROUP, remoteUser)) {
-			if (!candidate->LookupString(ATTR_PREEMPTING_USER, remoteUser)) {
-				if (!candidate->LookupString(ATTR_ACCOUNTING_GROUP, remoteUser)) {
-					candidate->LookupString(ATTR_REMOTE_USER, remoteUser);
+
+			// But don't bother with all these lookups if preemption is disabled.
+		if (ConsiderPreemption) {
+			if (!candidate->LookupString(ATTR_PREEMPTING_ACCOUNTING_GROUP, remoteUser)) {
+				if (!candidate->LookupString(ATTR_PREEMPTING_USER, remoteUser)) {
+					if (!candidate->LookupString(ATTR_ACCOUNTING_GROUP, remoteUser)) {
+						candidate->LookupString(ATTR_REMOTE_USER, remoteUser);
+					}
 				}
 			}
 		}
@@ -4930,7 +4953,7 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 		// not prefer it, just continue with the next offer ad....  we can
 		// skip all the below logic about preempt for user-priority, etc.
 		if ( only_for_startdrank ) {
-			if (( remoteUser == "" ) && (!pslotRankMatch)) {
+			if ( remoteUser.empty() && (!pslotRankMatch)) {
 					// offer does not have a remote user, thus we cannot eval
 					// startd rank yet because it does not make sense (the
 					// startd has nothing to compare against).  
@@ -4960,7 +4983,7 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 		// if there is a remote user, consider preemption ....
 		// Note: we skip this if only_for_startdrank is true since we already
 		//       tested above for the only condition we care about.
-		if ( (remoteUser != "") &&
+		if ( (!remoteUser.empty()) &&
 			 (!only_for_startdrank) ) {
 			if( EvalExprTree(rankCondStd, candidate, &request, result) && 
 				result.IsBooleanValue(val) && val ) {
@@ -5040,7 +5063,8 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 					candidatePreJobRankValue,
 					candidatePostJobRankValue,
 					candidatePreemptRankValue,
-					candidatePreemptState
+					candidatePreemptState,
+					candidateDslotClaims
 					);
 		}
 
@@ -5091,6 +5115,7 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 			bestPostJobRankValue = candidatePostJobRankValue;
 			bestPreemptState = candidatePreemptState;
 			bestPreemptRankValue = candidatePreemptRankValue;
+			bestDslotClaims = candidateDslotClaims;
 		}
 	}
 	startdAds.Close ();
@@ -5108,13 +5133,16 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 			dprintf(D_FULLDEBUG,"Finished sorting MatchList\n");
 		}
 		// Pop top candidate off the list to hand out as best match
-		bestSoFar = MatchList->pop_candidate();
+		bestSoFar = MatchList->pop_candidate(bestDslotClaims);
 	}
 
 	if(!bestSoFar)
 	{
 	/* Insert an entry into the rejects table only if no matches were found at all */
 		insert_into_rejects(scheddName,request);
+	}
+	if ( bestSoFar && !bestDslotClaims.empty() ) {
+		bestSoFar->Assign( "PreemptDslotClaims", bestDslotClaims );
 	}
 	// this is the best match
 	return bestSoFar;
@@ -5361,6 +5389,7 @@ matchmakingProtocol (ClassAd &request, ClassAd *offer,
 	// of the dslots being preempted.
 	string claim_id;
 	string all_claim_ids;
+	string dslotDesc;
     ClaimIdHash::iterator claimset = claimIds.end();
 	if (want_claiming) {
         string key = startdName.Value();
@@ -5378,6 +5407,8 @@ matchmakingProtocol (ClassAd &request, ClassAd *offer,
 		if (offer->LookupString("PreemptDslotClaims", extraClaims)) {
 			all_claim_ids += " ";
 			all_claim_ids += extraClaims;
+			size_t numExtraClaims = std::count(extraClaims.begin(), extraClaims.end(), ' ');
+			formatstr(dslotDesc, "%ld dslots", numExtraClaims); 
 			offer->Delete("PreemptDslotClaims");
 		}
 
@@ -5486,6 +5517,11 @@ matchmakingProtocol (ClassAd &request, ClassAd *offer,
 	} else {
 		remoteUser = remoteOwner;
 	}
+	
+	if (dslotDesc.length() > 0) {
+		remoteUser = dslotDesc;
+	}
+
 	if (offer->LookupString (ATTR_STARTD_IP_ADDR, startdAddr) == 0) {
 		startdAddr = "<0.0.0.0:0>";
 	}
@@ -5693,6 +5729,12 @@ calculateNormalizationFactor (ClassAdListDoesNotDeleteAds &scheddAds,
 void Matchmaker::
 addRemoteUserPrios( ClassAdListDoesNotDeleteAds &cal )
 {
+	if ((!ConsiderPreemption ) || (!param_boolean("NEGOTIATOR_CROSS_SLOT_PRIOS", true))) {
+			// Hueristic - no need to take the time to populate ad with 
+			// accounting information if no preemption is to be considered.
+		return;
+	}
+
 	ClassAd *ad;
 	cal.Open();
 	while( ( ad = cal.Next() ) ) {
@@ -5714,12 +5756,6 @@ addRemoteUserPrios( ClassAd	*ad )
 	float     preemptingRank;
 	float temp_groupQuota, temp_groupUsage;
     string temp_groupName;
-
-	if ( !ConsiderPreemption ) {
-			// Hueristic - no need to take the time to populate ad with 
-			// accounting information if no preemption is to be considered.
-		return;
-	}
 
 		// If there is a preempting user, use that for computing remote user prio.
 		// Otherwise, use the current user.
@@ -5877,12 +5913,15 @@ peek_candidate()
 #endif
 
 ClassAd* Matchmaker::MatchListType::
-pop_candidate()
+pop_candidate(string &dslot_claims)
 {
 	ClassAd* candidate = NULL;
 
 	while ( adListHead < adListLen && !candidate ) {
 		candidate = AdListArray[adListHead].ad;
+		if ( candidate ) {
+			dslot_claims = AdListArray[adListHead].DslotClaims;
+		}
 		adListHead++;
 	}
 
@@ -5910,6 +5949,7 @@ insert_candidate(ClassAd * candidate,
 	new_entry.PostJobRankValue = candidatePostJobRankValue;
 	new_entry.PreemptRankValue = candidatePreemptRankValue;
 	new_entry.PreemptStateValue = candidatePreemptState;
+	new_entry.DslotClaims.clear();
 
 		// Hand-rolled insertion sort; as the list was previously sorted,
 		// we know this will be O(n).
@@ -6041,7 +6081,8 @@ add_candidate(ClassAd * candidate,
 					double candidatePreJobRankValue,
 					double candidatePostJobRankValue,
 					double candidatePreemptRankValue,
-					PreemptState candidatePreemptState)
+					PreemptState candidatePreemptState,
+					const string &candidateDslotClaims)
 {
 	ASSERT(AdListArray);
 	ASSERT(adListLen < adListMaxLen);  // don't write off end of array!
@@ -6052,6 +6093,7 @@ add_candidate(ClassAd * candidate,
 	AdListArray[adListLen].PostJobRankValue = candidatePostJobRankValue;
 	AdListArray[adListLen].PreemptRankValue = candidatePreemptRankValue;
 	AdListArray[adListLen].PreemptStateValue = candidatePreemptState;
+	AdListArray[adListLen].DslotClaims = candidateDslotClaims;
 
     // This hack allows me to avoid mucking with the pseudo-que-like semantics of MatchListType, 
     // which ought to be replaced with something cleaner like std::deque<AdListEntry>
@@ -6605,7 +6647,7 @@ Matchmaker::calculate_subtree_usage(GroupEntry *group) {
 	subtree_usage += accountant.GetWeightedResourcesUsed(group->name.c_str());
 
 	group->subtree_usage = subtree_usage;;
-	dprintf(D_ALWAYS, "subtree_usage at %s is %g\n", group->name.c_str(), subtree_usage);
+	dprintf(D_FULLDEBUG, "subtree_usage at %s is %g\n", group->name.c_str(), subtree_usage);
 	return subtree_usage;
 }
 
@@ -6617,7 +6659,7 @@ bool rankPairCompare(std::pair<int,double> lhs, std::pair<int,double> rhs) {
 	// job with preempted resources from a dynamic slot.
 	// Only consider startd RANK for now.
 bool
-Matchmaker::pslotMultiMatch(ClassAd *job, ClassAd *machine, double preemptPrio) {
+Matchmaker::pslotMultiMatch(ClassAd *job, ClassAd *machine, double preemptPrio, string &dslot_claims) {
 	bool isPartitionable = false;
 
 	machine->LookupBool(ATTR_SLOT_PARTITIONABLE, isPartitionable);
@@ -6729,7 +6771,7 @@ Matchmaker::pslotMultiMatch(ClassAd *job, ClassAd *machine, double preemptPrio) 
 			EvalExprTree(PreemptionReqPslot, &mutatedMachine,job,result);
 
 				// and undo it for the next time
-			mutatedMachine.Remove("CandidateSlot");
+			mutatedMachine.Delete("CandidateSlot");
 
 			bool shouldPreempt = false;
 			if (!result.IsBooleanValue(shouldPreempt) || (shouldPreempt == false)) {
@@ -6774,11 +6816,11 @@ Matchmaker::pslotMultiMatch(ClassAd *job, ClassAd *machine, double preemptPrio) 
 
 		if (IsAMatch(&mutatedMachine, job)) {
 			dprintf(D_FULLDEBUG, "Matched pslot by rank preempting %d dynamic slots\n", slot + 1);
-			std::string claimsToPreempt;
+			dslot_claims.clear();
 
 			for (unsigned int child = 0; child < slot + 1; child++) {
-				claimsToPreempt += child_claims[ranks[child].first];
-				claimsToPreempt += " ";
+				dslot_claims += child_claims[ranks[child].first];
+				dslot_claims += " ";
 				// TODO Move this clearing of claim ids to
 				//   matchmakingProcotol(), after the match is successfully
 				//   sent to the schedd. That is where the claim id of the
@@ -6786,7 +6828,6 @@ Matchmaker::pslotMultiMatch(ClassAd *job, ClassAd *machine, double preemptPrio) 
 				child_claims[ranks[child].first] = "";
 			}
 
-			machine->Assign("PreemptDslotClaims", claimsToPreempt.c_str());
 			return true;
 		} 
 	}

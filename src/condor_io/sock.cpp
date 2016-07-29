@@ -383,7 +383,7 @@ int Sock::set_inheritable( int flag )
 	{
 		int err = WSAGetLastError();
 		dprintf(D_NETWORK,
-			"Failed SIO_BASE_HANDLE in set_inheritable on sock %d to %d (err=%d, %s)",
+			"Failed SIO_BASE_HANDLE in set_inheritable on sock %d to %d (err=%d, %s)\n",
 			_sock, flag, err, GetLastErrorString(err) );
 		// Well, we failed to get the "real" handle for whatever reason.
 		// We may as well try to move forward with the original _sock handle.
@@ -401,7 +401,7 @@ int Sock::set_inheritable( int flag )
 		{
 			int err = WSAGetLastError();
 			dprintf(D_NETWORK,
-				"Failed to set_inheritable on sock %d to %d (err=%d, %s)",
+				"Failed to set_inheritable on sock %d to %d (err=%d, %s)\n",
 				_sock, flag, err, GetLastErrorString(err) );
 		} else {
 			sethandle_worked = true;
@@ -574,10 +574,14 @@ int Sock::assignSocket( condor_protocol proto, SOCKET sockd ) {
 	//
 
 	int af_type = 0;
-	switch(proto) {
-		case CP_IPV4: af_type = AF_INET; break;
-		case CP_IPV6: af_type = AF_INET6; break;
-		default: ASSERT(false);
+	if (_who.is_valid()) {
+		af_type = _who.get_aftype();
+	} else {
+		switch(proto) {
+			case CP_IPV4: af_type = AF_INET; break;
+			case CP_IPV6: af_type = AF_INET6; break;
+			default: ASSERT(false);
+		}
 	}
 
 	int my_type = 0;
@@ -660,7 +664,7 @@ Sock::bindWithin(condor_protocol proto, const int low_port, const int high_port,
 	// int pid = (int) getpid();
 
 	// lets use time as the starting point instead...
-	long randomish_val;
+	unsigned long randomish_val;
 #ifndef WIN32
 	struct timeval curTime;
 	(void) gettimeofday(&curTime, NULL);
@@ -668,7 +672,7 @@ Sock::bindWithin(condor_protocol proto, const int low_port, const int high_port,
 #else
 	LARGE_INTEGER li;
 	::QueryPerformanceCounter(&li);
-	randomish_val = (int)li.LowPart;
+	randomish_val = li.LowPart % 1000000; // force into range of usec to avoid overflow when we multiply
 #endif
 
 	int range = high_port - low_port + 1;
@@ -797,8 +801,14 @@ int Sock::bind(condor_protocol proto, bool outbound, int port, bool loopback)
 		}
 	} else {
 			// Bind to a dynamic port.
-
-		addr.set_protocol(proto);
+		if (_who.is_valid()) {
+			if (_who.is_ipv6()) { addr.set_ipv6(); }
+			else { addr.set_ipv4(); }
+		}
+		else
+		{
+			addr.set_protocol(proto);
+		}
 		if( loopback ) {
 			addr.set_loopback();
 		} else if( (bool)_condor_bind_all_interfaces() ) {
@@ -2062,10 +2072,10 @@ char * Sock::serializeMdInfo() const
 	return( outbuf );
 }
 
-char * Sock::serializeCryptoInfo(char * buf)
+const char * Sock::serializeCryptoInfo(const char * buf)
 {
 	unsigned char * kserial = NULL;
-    char * ptmp = buf;
+    const char * ptmp = buf;
     int    len = 0, encoded_len = 0;
     int protocol = CONDOR_NO_PROTOCOL;
 
@@ -2125,10 +2135,10 @@ char * Sock::serializeCryptoInfo(char * buf)
 	return ptmp;
 }
 
-char * Sock::serializeMdInfo(char * buf)
+const char * Sock::serializeMdInfo(const char * buf)
 {
 	unsigned char * kmd = NULL;
-    char * ptmp = buf;
+    const char * ptmp = buf;
     int    len = 0, encoded_len = 0;
 
     // kmd may be a problem since reli_sock also has stuff after
@@ -2217,7 +2227,7 @@ Sock::close_serialized_socket(char const *buf)
 	::close(passed_sock);
 }
 
-char * Sock::serialize(char *buf)
+const char * Sock::serialize(const char *buf)
 {
 	int i;
 	SOCKET passed_sock;
