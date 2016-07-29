@@ -19,7 +19,8 @@ my $template;
 	$template->{ Description } = "HTCondor Marketplace v1";
 
 	$template->{ Mappings }->{ RegionToDefaultAMI } = {
-		"us-east-1" => { DefaultAMI => "ami-56aeb43c" }
+		# "us-east-1" => { DefaultAMI => "ami-56aeb43c" }
+		"us-east-1" => { DefaultAMI => "ami-91e1a3fb" }
 	};
 
 	$template->{ Parameters }->{ KeyName } = {
@@ -35,7 +36,8 @@ my $template;
 
 	$template->{ Parameters }->{ LeaseDuration } = {
 		Type => "Number",
-		Default => 240,
+#		Default => 240,
+		Default => 5,
 		MinValue => 1,
 		Description => "Length, in minutes, of the lease.",
 		"ConstraintDescription" => "[LeaseDuration] The lease must be at least one minute."
@@ -55,6 +57,33 @@ my $template;
 			InstanceType => { Ref => "InstanceType" },
 			KeyName => { Ref => "KeyName" },
 			SubnetId => { Ref => "DefaultSubnet" }
+		}
+	};
+
+	#
+	# Test Spot Fleet leasing.
+	#
+	$template->{ Resources }->{ TheSpotFleet } = {
+		Type => "AWS::EC2::SpotFleet",
+		Properties => {
+			SpotFleetRequestConfigData => {
+				AllocationStrategy => "lowestPrice",
+				IamFleetRole => "arn:aws:iam::844603466475:role/aws-ec2-spot-fleet-role",
+				SpotPrice => "0.10",
+				TargetCapacity => 1,
+				ExcessCapacityTerminationPolicy => "noTermination",
+				TerminateInstancesWithExpiration => "false",
+				LaunchSpecifications => [
+					{
+						ImageId => { "Fn::FindInMap" => [ "RegionToDefaultAMI", { Ref => "AWS::Region" }, "DefaultAMI" ] },
+						SecurityGroups => [ { "GroupId" => { "Fn::GetAtt" => [ "DefaultSecurityGroup", "GroupId" ] } } ],
+						UserData => { "Fn::Base64" => $userData },
+						InstanceType => { Ref => "InstanceType" },
+						KeyName => { Ref => "KeyName" },
+						SubnetId => { Ref => "DefaultSubnet" }
+					}
+				]
+			}
 		}
 	};
 
@@ -230,6 +259,9 @@ sub addLeaseToTemplate {
 
 									"iam:DeleteRolePolicy",
 									"iam:DeleteRole",
+
+									"ec2:CancelSpotFleetRequests",
+									"ec2:DescribeSpotFleetRequests",
 
 									"ec2:DescribeInstances",
 									"ec2:TerminateInstances",

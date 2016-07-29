@@ -8,6 +8,7 @@ use JSON;
 use Data::Dumper;
 use POSIX;
 use File::Basename;
+use MIME::Base64;
 
 use constant TRUE => 1;
 use constant FALSE => 0;
@@ -301,10 +302,7 @@ if( (! $stackExists) || defined( $annexSize ) ) {
 	if( defined( $imageIDList ) && defined( $instanceTypeList ) ) {
 		my @imageList = split( ",", $imageIDList );
 		my @instanceList = split( ",", $instanceTypeList );
-		my @spotList = ();
-		if( $spotPriceList ) {
-			@spotList = split( ",", $spotPriceList );
-		}
+		my @spotList = split( ",", $spotPriceList );
 		if( scalar( @imageList ) != scalar( @instanceList ) ) {
 			print( "Image ID list and instance type list are not the same length, aborting.\n" );
 			exit( 1 );
@@ -440,9 +438,15 @@ if( ! $stackExists ) {
 my @asgNames = undef;
 unless( $stackExists && (! defined( $annexSize )) ) {
 	print( "Waiting for annex to create autoscaling groups..." );
+	# FIXME: We will only create AutoScaling Groups for on-demand instances.
 	@asgNames = waitForAutoScalingGroups( $stackName, scalar( @{$imageIDs} ) );
 	print( " done.\n" );
 }
+
+# FIXME: We need to wait for the Spot Fleet to be created, as well.
+
+# FIXME: We need to be able to split size changes among the AutosSaling
+# Groups and the Spot Fleet; the Spot Fleet's size is at least 1.
 
 if( defined( $annexSize ) ) {
 	my $asgSize = scalar( @asgNames );
@@ -550,91 +554,561 @@ sub stackExists {
 	return FALSE;
 }
 
+sub generateTemplate {
+	my( $stackName, $centralManager, $keypairName, $duration, $size, $passwordLocation, $vpc, $subnets, $imageIDs, $instanceTypes ) = @_;
+
+	my $template;
+	$template->{ AWSTemplateFormatVersion } = "2010-09-09";
+	$template->{ Description } = "Annex for project ${projectID}.";
+
+	$template->{ Parameters }->{ Size } = { Type => "Number" };
+	$template->{ Parameters }->{ LeaseDuration } = { Type => "Number" };
+
+	my $lambdaBasicExecutionPolicy = {
+		PolicyName => "lambda_basic_execution",
+		PolicyDocument => {
+			Version => "2012-10-17",
+			Statement => [ {
+				Effect => "Allow",
+					Action => [
+						"logs:CreateLogGroup",
+						"logs:CreateLogStream",
+						"logs:PutLogEvents"
+						],
+					Resource => "arn:aws:logs:*:*:*"
+			}]
+		}
+	};
+
+	my $assumeRoleFromLambda = {
+		Version => "2012-10-17",
+		Statement => [ {
+			Effect => "Allow",
+			Action => [ "sts:AssumeRole" ],
+			Principal => { Service => [ "lambda.amazonaws.com" ] }
+		} ]
+	};
+
+	$template->{ Resources }->{ LeaseFunctionRole } = {
+		Type => "AWS::IAM::Role",
+		Properties => {
+			AssumeRolePolicyDocument => $assumeRoleFromLambda,
+			Policies => [
+				$lambdaBasicExecutionPolicy,
+				{
+					PolicyName => "lambda_lease_policy",
+					PolicyDocument => {
+						Version => "2012-10-17",
+						Statement => [ {
+							Effect => "Allow",
+							Action => [
+								"cloudformation:DeleteStack",
+								"cloudformation:DescribeStackResource",
+								"sns:ListTopics",
+								"sns:ListSubscriptionsByTopic",
+								"sns:DeleteTopic",
+								"sns:Unsubscribe",
+								"cloudwatch:DeleteAlarms",
+								"cloudwatch:SetAlarmState",
+								"cloudwatch:GetMetricStatistics",
+								"autoscaling:DescribeAutoScalingGroups",
+								"autoscaling:DescribeScalingActivities",
+								"autoscaling:UpdateAutoScalingGroup",
+								"autoscaling:DeleteAutoScalingGroup",
+								"autoscaling:DeleteLaunchConfiguration",
+								"lambda:InvokeFunction",
+								"lambda:DeleteFunction",
+								"ec2:DeleteSecurityGroup",
+								"iam:DeleteRole",
+								"iam:DeleteRolePolicy",
+								"iam:RemoveRoleFromInstanceProfile",
+								"iam:DeleteInstanceProfile"
+							],
+							Resource => "*"
+						} ]
+					}
+				}
+			]
+		}
+	};
+
+	my $statements = [
+		{
+			Effect => "Allow",
+			Action => [
+				"cloudformation:DescribeStackResource",
+				"sns:ListSubscriptionsByTopic",
+				"sns:Unsubscribe"
+			],
+			Resource => "*"
+		}, {
+			Effect => "Allow",
+			Action => [ "s3:deleteObject" ],
+			Resource => "arn:aws:s3:::${passwordLocation}"
+		}
+	];
+	if( $createdS3Bucket ) {
+		my $statement = {
+			Effect => "Allow",
+			Action => [ "s3:deleteObject" ],
+			Resource => "arn:aws:s3:::${s3Bucket}"
+		};
+		push( @{$statements}, $statement );
+	}
+	if( defined( $configLocation ) ) {
+		my $statement = {
+			Effect => "Allow",
+			Action => [ "s3:deleteObject" ],
+			Resource => "arn:aws:s3:::${configLocation}"
+		};
+		push( @{$statements}, $statement );
+	}
+
+	$template->{ Resources }->{ CleanUpFunctionRole } = {
+		Type => "AWS::IAM::Role",
+		DependsOn => "LeaseFunctionRole",
+		Properties => {
+			AssumeRolePolicyDocument => $assumeRoleFromLambda,
+			Policies => [
+				$lambdaBasicExecutionPolicy,
+				{
+					PolicyName => "lambda_cleanup_policy",
+					PolicyDocument => {
+						Version => "2012-10-17",
+						Statement => $statements,
+					}
+				}
+			],
+		}
+	};
+
+	$template->{ Resources }->{ PlumbingFunctionRole } = {
+		Type => "AWS::IAM::Role",
+		DependsOn => "LeaseFunctionRole",
+		Properties => {
+			AssumeRolePolicyDocument => $assumeRoleFromLambda,
+			Policies => [
+				$lambdaBasicExecutionPolicy,
+				{
+					PolicyName => "lambda_plumbing_policy",
+					PolicyDocument => {
+						Version => "2012-10-17",
+						Statement => [
+							{
+								Effect => "Allow",
+								Action => [ "lambda:addPermission" ],
+								Resource => { "Fn::GetAtt" => [ "LeaseFunction", "Arn" ] }
+							}
+						]
+					}
+				}
+			],
+		}
+	};
+
+	$template->{ Resources }->{ ActivateAlarmFunctionRole } = {
+		Type => "AWS::IAM::Role",
+		DependsOn => "LeaseFunctionRole",
+		Properties => {
+			AssumeRolePolicyDocument => $assumeRoleFromLambda,
+			Policies => [
+				$lambdaBasicExecutionPolicy,
+				{
+					PolicyName => "lambda_alarm_policy",
+					PolicyDocument => {
+						Version => "2012-10-17",
+						Statement => [
+							{
+								Effect => "Allow",
+								Action => [ "cloudwatch:putMetricData" ],
+								Resource => "*"
+							}
+						]
+					}
+				}
+			]
+		}
+	};
+
+
+	$template->{ Resources }->{ SecurityGroup } = {
+		Type => "AWS::EC2::SecurityGroup",
+		DependsOn => "LeaseFunctionRole",
+		Properties => {
+			GroupDescription => "SSH and HTCondor",
+			VpcId => $vpc,
+			SecurityGroupIngress => [
+				{ IpProtocol => "tcp", FromPort => 22, ToPort => 22, CidrIp => "0.0.0.0/0" },
+				{ IpProtocol => "tcp", FromPort => 9618, ToPort => 9618, CidrIp => "0.0.0.0/0" }
+			]
+		}
+	};
+
+	$statements = [
+		{
+			Effect => "Allow",
+			Action => [ "s3:GetObject" ],
+			Resource => "arn:aws:s3:::${passwordLocation}"
+		}, {
+			Effect => "Allow",
+			Action => [
+				"autoscaling:DetachInstances",
+				"cloudformation:DescribeStackResource",
+				"ec2:ModifyInstanceAttribute"
+			],
+			Resource => "*"
+		}
+	];
+	if( defined( $configLocation ) ) {
+		my $statement = {
+			Effect => "Allow",
+			Action => [ "s3:GetObject" ],
+			Resource => "arn:aws:s3:::${configLocation}"
+		};
+		push( @{$statements}, $statement );
+	}
+	$template->{ Resources }->{ InstanceRole } = {
+		Type => "AWS::IAM::Role",
+		DependsOn => "LeaseFunctionRole",
+		Properties => {
+			AssumeRolePolicyDocument => {
+				Version => "2012-10-17",
+				Statement => [ {
+					Effect => "Allow",
+					Action => [ "sts:AssumeRole" ],
+					Principal => { Service => [ "ec2.amazonaws.com" ] }
+				} ]
+			},
+			Policies => [
+				$lambdaBasicExecutionPolicy,
+				{
+					PolicyName => "SecurityTokenAccess",
+					PolicyDocument => {
+						Version => "2012-10-17",
+						Statement => $statements,
+					}
+				}
+			]
+		}
+	};
+
+	$template->{ Resources }->{ InstanceProfile } = {
+		Type => "AWS::IAM::InstanceProfile",
+		DependsOn => "InstanceRole",
+		Properties => {
+			Path => "/",
+			Roles => [ { Ref => "InstanceRole" } ]
+		}
+	};
+
+
+	$template->{ Resources }->{ LeaseFunction } = {
+		Type => "AWS::Lambda::Function",
+		DependsOn => "LeaseFunctionRole",
+		Properties => {
+			Code => {
+				S3Bucket => "condor-annex-${region}",
+				S3Key => "lease-function-${VERSION}.jar"
+			},
+			Handler => "org.HTCondor.Lease",
+			MemorySize => 256,
+			Role => { "Fn::GetAtt" => [ "LeaseFunctionRole", "Arn" ] },
+			Runtime => "java8",
+			Timeout => 30
+		}
+	};
+
+	$template->{ Resources }->{ CleanUpFunction } = {
+		Type => "AWS::Lambda::Function",
+		DependsOn => "CleanUpFunctionRole",
+		Properties => {
+			Handler => "cleanup.handler",
+			Runtime => "nodejs",
+			Role => { "Fn::GetAtt" => [ "CleanUpFunctionRole", "Arn" ] },
+			Timeout => 30,
+			Code => {
+				S3Bucket => "condor-annex-${region}",
+				S3Key => "cleanup-${VERSION}.zip"
+			}
+		}
+	};
+
+	# TODO: Move this to its own file/source, like the lease function.
+	my $plumbingFunctionCode = qq!
+
+var response = require( 'cfn-response' );
+exports.handler = function( event, context ) {
+	console.log( 'Received request:\\n', JSON.stringify( event ) );
+	if( event.RequestType == 'Delete' ) {
+		// Delete subscription?
+		response.send( event, context, response.SUCCESS );
+		return;
+	}
+
+	var responseData = {};
+	var functionName = event.ResourceProperties.functionName;
+	var sourceArn = event.ResourceProperties.sourceArn;
+	if( sourceArn ) {
+		var AWS = require( 'aws-sdk' );
+		var lambda = new AWS.Lambda();
+		var params = {  Action : 'lambda:InvokeFunction',
+			FunctionName : functionName,
+			Principal : 'sns.amazonaws.com',
+			StatementId : 'Condor-Annex-Permissions',
+			SourceArn : sourceArn
+		};
+		lambda.addPermission( params, function( error, data ) {
+			if( error ) {
+				console.log( error, error.stack );
+				responseData = { Error : 'addPermission() call failed' };
+				response.send( event, context, response.FAILED, responseData );
+				return;
+			} else {
+				console.log( data );
+				response.send( event, context, response.SUCCESS );
+				return;
+			}
+		});
+	} else {
+		responseData = { Error : 'sourceArn not specified' };
+		console.log( responseData.Error );
+		response.send( event, context, response.FAILED, responseData );
+	}
+}
+
+	!;
+	$template->{ Resources }->{ PlumbingFunction } = {
+		Type => "AWS::Lambda::Function",
+		DependsOn => "PlumbingFunctionRole",
+		Properties => {
+			Handler => "index.handler",
+			Runtime => "nodejs",
+			Role => { "Fn::GetAtt" => [ "PlumbingFunctionRole", "Arn" ] },
+			Timeout => 30,
+			Code => { "ZipFile" => $plumbingFunctionCode }
+		}
+	};
+
+	# TODO: Move this to its own file/source, like the lease function.
+	my $activateAlarmFunctionCode = qq!
+
+var response = require( 'cfn-response' );
+exports.handler = function( event, context ) {
+	console.log( 'Received request:\\n', JSON.stringify( event ) );
+	if( event.RequestType == 'Delete' ) {
+		response.send( event, context, response.SUCCESS );
+		return;
+	}
+
+	var responseData = {};
+	var namespace = event.ResourceProperties.Namespace;
+	if( namespace ) {
+		var AWS = require( 'aws-sdk' );
+		var cloudWatch = new AWS.CloudWatch();
+		var params = {
+			MetricData : [ {
+				MetricName : 'Lease',
+				Value : 1
+			} ],
+			Namespace : namespace
+		};
+
+		cloudWatch.putMetricData( params, function( error, data ) {
+			if( error ) {
+				console.log( error, error.stack );
+				responseData = { Error : 'putMetricData() call failed' };
+				response.send( event, context, response.FAILED, responseData );
+				return;
+			} else {
+				console.log( data )
+				response.send( event, context, response.SUCCESS );
+				return;
+			}
+		});
+	} else {
+		responseData = { Error : 'Namespace not specified' };
+		console.log( responseData.Error );
+		response.send( event, context, response.FAILED, responseData );
+	}
+};
+	!;
+	$template->{ Resources }->{ ActivateAlarmFunction } = {
+		Type => "AWS::Lambda::Function",
+		DependsOn => "ActivateAlarmFunctionRole",
+		Properties => {
+			Code => { "ZipFile" => $activateAlarmFunctionCode },
+			Description => "Initializes the lease",
+			Handler => "index.handler",
+			Runtime => "nodejs",
+			Timeout => 30,
+			Role => { "Fn::GetAtt" => [ "ActivateAlarmFunctionRole", "Arn" ] }
+		}
+	};
+
+
+	$template->{ Resources }->{ Topic } = {
+		Type => "AWS::SNS::Topic",
+		DependsOn => "LeaseFunctionRole",
+		Properties => {
+			Subscription => [
+				{ Protocol => "lambda", Endpoint => { "Fn::GetAtt" => [ "LeaseFunction", "Arn" ] } }
+			]
+		}
+	};
+
+	$template->{ Resources }->{ Alarm } = {
+		Type => "AWS::CloudWatch::Alarm",
+		DependsOn => "LeaseFunctionRole",
+		Properties => {
+			MetricName => "Lease",
+			Namespace => {
+				"Fn::Join" => [ "/", [
+						"HTCondor", "Leases", "CloudFormation",
+						{ Ref => "AWS::StackName" }
+					]
+				]
+			},
+			Statistic => "Sum",
+			Period => 60,
+			EvaluationPeriods => { Ref => "LeaseDuration" },
+			Threshold => 1,
+			ComparisonOperator => "LessThanThreshold",
+			AlarmActions => [ { Ref => "Topic" } ],
+			InsufficientDataActions => [ { Ref => "Topic" } ]
+		}
+	};
+
+
+	$template->{ Resources }->{ DoCleanUp } = {
+		Type => "Custom::CleanUp",
+		DependsOn => "CleanUpFunction",
+		Properties => {
+			ServiceToken => { "Fn::GetAtt" => [ "CleanUpFunction", "Arn" ] },
+			topicARN => { Ref => "Topic" },
+			s3PoolPassword => $passwordLocation
+		}
+	};
+
+	$template->{ Resources }->{ DoCleanUp }->{ Properties }->
+		{ s3DeleteBucket } = $createdS3Bucket ? $s3Bucket : "";
+	$template->{ Resources }->{ DoCleanUp }->{ Properties }->
+		{ s3ConfigFile } = $configLocation ? $configLocation : "";
+
+	$template->{ Resources }->{ DoPlumbing } = {
+		Type => "Custom::Plumbing",
+		DependsOn => "PlumbingFunction",
+		Properties => {
+			ServiceToken => { "Fn::GetAtt" => [ "PlumbingFunction", "Arn" ] },
+			functionName => { Ref => "LeaseFunction" },
+			sourceArn => { Ref => "Topic" }
+		}
+	};
+
+	$template->{ Resources }->{ DoActivateAlarm } = {
+		Type => "Custom::ActivateAlarm",
+		DependsOn => "ActivateAlarmFunction",
+		Properties => {
+			ServiceToken => { "Fn::GetAtt" => [ "ActivateAlarmFunction", "Arn" ] },
+			Namespace => {
+				"Fn::Join" => [ "/", [
+					"HTCondor", "Leases", "CloudFormation", {
+						Ref => "AWS::StackName"
+						}
+					]
+				]
+			}
+		}
+	};
+
+
+	my @subnets = split( /, /, $subnets );
+	my $autoScalingGroup = {
+		Type => "AWS::AutoScaling::AutoScalingGroup",
+		Properties => {
+			MinSize => 0,
+			DesiredCapacity => 0,
+			MaxSize => { Ref => "Size" },
+			VPCZoneIdentifier => [ @subnets ],
+			Tags => [
+				{
+					Key => "ProjectID",
+					Value => $projectID,
+					PropagateAtLaunch => "true"
+				}
+			]
+		}
+	};
+	my $userData = encode_base64( "FIXME" );
+	my $launchConfiguration = {
+		Type => "AWS::AutoScaling::LaunchConfiguration",
+		DependsOn => "LeaseFunctionRole",
+		Metadata => { FIXME => "FIXME" },
+		Properties => {
+			KeyName => $keypairName,
+			AssociatePublicIpAddress => "true",
+			SecurityGroups => [ { Ref => "SecurityGroup" } ],
+			IamInstanceProfile => { "Fn::GetAtt" => [ "InstanceProfile", "Arn" ] },
+			UserData => $userData
+		}
+	};
+	for( my $i = 0; $i < scalar( @{$instanceTypes} ); ++$i ) {
+		if( defined( $spotPrices->[ $i ] ) ) {
+			# FIXME
+		} else {
+			my %lciProperties = %{$launchConfiguration->{ Properties }};
+			$lciProperties{ ImageId } = $imageIDs->[ $i ];
+			$lciProperties{ InstanceType } = $instanceTypes->[ $i ];
+			my %lci = %{$launchConfiguration};
+			$lci{ Properties } = \%lciProperties;
+			my $lciName = "LaunchConfiguration" . ($i + 1);
+			$template->{ Resources }->{ $lciName } = \%lci;
+
+			my %asgiProperties = %{$autoScalingGroup->{ Properties }};
+			$asgiProperties{ LaunchConfigurationName } = { "Ref" => $lciName };
+			my %asgi = %{$autoScalingGroup};
+			$asgi{ DependsOn } = $lciName;
+			$asgi{ Properties } = \%asgiProperties;
+			my $asgiName = "AutoScalingGroup" . ($i + 1 );
+			$template->{ Resources }->{ $asgiName } = \%asgi;
+		}
+	}
+
+	# Prettier, for debugging.
+	# return to_json( $template, { utf8 => 1, pretty => 1 } );
+	return encode_json( $template );
+}
+
 sub createStack {
 	my( $stackName, $centralManager, $keypairName, $duration, $size, $passwordLocation, $vpc, $subnets, $imageIDs, $instanceTypes ) = @_;
 
-	my $parameters = '[
-            {
-                "ParameterKey" : "CentralManager",
-                "ParameterValue" : "' . $centralManager . '"
-            },
-            {
-                "ParameterKey" : "SSHKeypairName",
-                "ParameterValue" : "' . $keypairName . '"
-            },
-            {
-                "ParameterKey" : "LeaseDuration",
-                "ParameterValue" : "' . $duration . '"
-            },
-            {
-                "ParameterKey" : "Size",
-                "ParameterValue" : "' . $size . '"
-            },
-            {
-                "ParameterKey" : "S3PoolPassword",
-                "ParameterValue" : "' . $passwordLocation . '"
-            },
-            {
-                "ParameterKey" : "ProjectID",
-                "ParameterValue" : "' . $projectID . '"
-            },
-            {
-                "ParameterKey" : "VPC",
-                "ParameterValue" : "' . $vpc . '"
-            },
-            {
-                "ParameterKey" : "VPCSubnets",
-                "ParameterValue" : "' . $subnets . '"
-            }';
-	if( $createdS3Bucket ) {
-		$parameters .= ',
-			{
-				"ParameterKey" : "S3DeleteBucket",
-				"ParameterValue" : "' . $s3Bucket . '"
-			}';
-	}
-	if( defined( $configLocation ) ) {
-		$parameters .= ',
-			{
-				"ParameterKey" : "S3ConfigFile",
-				"ParameterValue" : "' . $configLocation . '"
-			}';
-	}
-	for( my $i = 0; $i < scalar( @{$instanceTypes} ); ++$i ) {
-		$parameters .= ',
-            {
-                "ParameterKey" : "ImageID' . ($i + 1) . '",
-                "ParameterValue" : "' . $imageIDs->[ $i ] . '"
-            },
-            {
-                "ParameterKey" : "InstanceType' . ($i + 1) . '",
-                "ParameterValue" : "' . $instanceTypes->[ $i ] . '"
-            }';
-        if( defined( $spotPrices->[ $i ] ) ) {
-        	$parameters .= ',
-        	{
-                "ParameterKey" : "SpotPrice' . ($i + 1) . '",
-                "ParameterValue" : "' . $spotPrices->[ $i ] . '"
-        	}' . "\n";
-        } else {
-        	$parameters .= "\n";
-        }
-	}
-	$parameters .= ']';
+	my $template = generateTemplate( @_ );
+	my $parameters = [
+		{ ParameterKey => "Size", ParameterValue => "${size}" },
+		{ ParameterKey => "LeaseDuration", ParameterValue => "${duration}" }
+	];
 
+	# TODO: The 'template-body' parameter is limited to 51,200 bytes.
+	# We can squeeze a bunch more space out by moving the functions to their
+	# own files -- which is something we should be doing for other reasons,
+	# including maintainability and preparing to split the stack -- but
+	# the template's max size in S3 is 460,800 bytes, so we should make that
+	# a possibility, too.
 	my @command = (
 		'aws', '--region', $region, 'cloudformation', 'create-stack',
-		'--template-url', "https://s3.amazonaws.com/condor-annex-${region}/template-${VERSION}",
+		'--template-body', $template,
 		'--stack-name', $stackName,
-    	'--capabilities', 'CAPABILITY_IAM',
-    	'--tags', "Key=ProjectID,Value=${projectID}",
-		'--parameters', $parameters );
+		'--capabilities', 'CAPABILITY_IAM',
+		'--tags', "Key=ProjectID,Value=${projectID}",
+		'--parameters', encode_json( $parameters )
+	);
 
 	my( $rv, $log ) = capture( @command );
 	if( $rv != 0 ) {
 		print( $log );
 		print( "\n" );
 		print( "Unable to create CloudFormation stack ($rv), aborting.\n" );
+		# print( "Failed template follows.\n" );
+		# print( $template . "\n" );
 		exit( 1 );
 	}
 }
@@ -888,37 +1362,7 @@ sub setAnnexLeaseDuration {
     	'--capabilities', 'CAPABILITY_IAM',
 		'--parameters',
 			'ParameterKey=Size,UsePreviousValue=true',
-			'ParameterKey=CentralManager,UsePreviousValue=true',
 			"ParameterKey=LeaseDuration,ParameterValue=${duration}",
-			'ParameterKey=SSHKeypairName,UsePreviousValue=true',
-			'ParameterKey=S3PoolPassword,UsePreviousValue=true',
-			'ParameterKey=ProjectID,UsePreviousValue=true',
-			'ParameterKey=VPC,UsePreviousValue=true',
-			'ParameterKey=VPCSubnets,UsePreviousValue=true',
-			'ParameterKey=ImageID1,UsePreviousValue=true',
-			'ParameterKey=SpotPrice1,UsePreviousValue=true',
-			'ParameterKey=InstanceType1,UsePreviousValue=true',
-			'ParameterKey=ImageID2,UsePreviousValue=true',
-			'ParameterKey=SpotPrice2,UsePreviousValue=true',
-			'ParameterKey=InstanceType2,UsePreviousValue=true',
-			'ParameterKey=ImageID3,UsePreviousValue=true',
-			'ParameterKey=SpotPrice3,UsePreviousValue=true',
-			'ParameterKey=InstanceType3,UsePreviousValue=true',
-			'ParameterKey=ImageID4,UsePreviousValue=true',
-			'ParameterKey=SpotPrice4,UsePreviousValue=true',
-			'ParameterKey=InstanceType4,UsePreviousValue=true',
-			'ParameterKey=ImageID5,UsePreviousValue=true',
-			'ParameterKey=SpotPrice5,UsePreviousValue=true',
-			'ParameterKey=InstanceType5,UsePreviousValue=true',
-			'ParameterKey=ImageID6,UsePreviousValue=true',
-			'ParameterKey=SpotPrice6,UsePreviousValue=true',
-			'ParameterKey=InstanceType6,UsePreviousValue=true',
-			'ParameterKey=ImageID7,UsePreviousValue=true',
-			'ParameterKey=SpotPrice7,UsePreviousValue=true',
-			'ParameterKey=InstanceType7,UsePreviousValue=true',
-			'ParameterKey=ImageID8,UsePreviousValue=true',
-			'ParameterKey=SpotPrice8,UsePreviousValue=true',
-			'ParameterKey=InstanceType8,UsePreviousValue=true'
 		);
 	my( $rv, $log ) = capture( @command );
 	if( $rv != 0 ) {

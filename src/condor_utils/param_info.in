@@ -1,3 +1,27 @@
+[ANNEXD]
+default=$(SBIN)/condor_annexd
+type=path
+reconfig=true
+customization=seldom
+friendly_name=annex daemon
+tags=master,master
+
+[ANNEXD_LOG]
+default=$(LOG)/AnnexLog
+type=path
+reconfig=true
+customization=seldom
+friendly_name=annex daemon log
+tags=annexd,log
+
+[ANNEX_POLLING_LOG]
+default=$(LOG)/AnnexPollingLog
+type=path
+reconfig=true
+customization=seldom
+friendly_name=annex polling log
+tags=annexd,log
+
 [ENABLE_KERNEL_TUNING]
 default=true
 type=bool

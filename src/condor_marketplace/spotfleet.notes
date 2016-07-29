@@ -1,0 +1,78 @@
+* "UpdateItem -- if the item does not already exist, this operation creates a new item; otherwise, it modifies an existing item's attributes. You must specify the table name and the key of the item you want to modify. For each of the attributes that you want to update, you must provide new values for them."
+* "DynamoDB supports atomic counters, where you use the UpdateItem operation to increment or decrement the value of an existing attribute without interfering with other write requests."
+* "Atomic counter updates are not idempotent."
+* "To update an atomic counter, use an UpdateItem operation with an attribute of type Number in the UpdateExpression parameter, and SET as the update action to perform."
+* "To request a conditional PutItem, DeleteItem, or UpdateItem, you specify the condition(s) in the ConditionExpression parameter. ConditionExpression is a string containing attribute names, conditional operators and built-in functions. The entire expression must evaluate to true; otherwise the operation will fail."
+
+Therefore, we should have a table, =Instances=, with a primary key of
+=InstanceID=.  Each instance should use UpdateItem() to send its
+instance ID to the database.  The clean-up function selects all of the
+=Instances=, logs their IDs (and counts them), adjusts the size of the
+Spot Fleet, and then removes all of the =InstanceIDs= it knows about.
+
+We won't handle multiple uses of the same instance ID, since AWS thinks that
+shouldn't ever happen.
+
+#
+# We call a Lambda function every minute (e.g., the lease function).  That
+# function looks at the DynamoDB table we use to asynchronously  record
+# which instances want to exit.  The function logs those instance IDs,
+# counts them, and then adjusts the size of the Spot Fleet appropriately.
+# When that's succeeded, it removes each of those instance IDs' item
+# from the table.  We may need to loop the SELECT and DELETE operations,
+# as well.  ([] Ask Will why.)
+#
+
+# Create the table.  We want CloudFormation to do this for us.
+#
+# [] Add a global secondary index on InstanceStatus?
+aws dynamodb create-table \
+	--table-name Instances \
+	--key-schema AttributeName=InstanceID,KeyType=HASH \
+	--attribute-definitions \
+		AttributeName=InstanceID,AttributeType=S \
+	--provisioned-throughput \
+		ReadCapacityUnits=10,WriteCapacityUnits=10
+
+# Create an entry on start-up.  We probably don't need this.
+aws dynamodb put-item \
+	--table-name Instances \
+	--item '{
+		"InstanceID" : { "S" : "i-abcdef" },
+		"InstanceStatus" : { "S" : "RUNNING" }
+		}' \
+	--return-consumed-capacity TOTAL \
+	--condition-expression 'attribute_not_exists( InstanceID )'
+
+# Enter the DYING state on shut-down.
+#
+# [] Consider failure cases.  We should always self-terminate.
+aws dynamodb update-item \
+	--table-name Instances \
+	--key '{ "InstanceID" : { "S" : "i-abcdef" } }' \
+	--update-expression 'SET InstanceStatus = :DyingStatus' \
+	--expression-attribute-values '{
+		":DyingStatus" : { "S" : "DYING" },
+		":RunningStatus" : { "S" : "RUNNING" }
+	}' \
+	--condition-expression 'InstanceStatus = :RunningStatus' \
+	--return-consumed-capacity TOTAL
+
+# Obtain all DYING instance IDs.
+#
+# * Consider looping to handle more items at each go.
+aws dynamodb scan \
+	--table-name Instances \
+	--filter-expression 'InstanceStatus = :DyingStatus' \
+	--expression-attribute-values '{ ":DyingStatus" : { "S" : "DYING" } }' \
+	--return-consumed-capacity TOTAL
+
+# Adjust size of Spot Fleet by value of returned attribute "Count".
+
+# Delete all DYING instance IDs.
+aws dynamodb delete-item \
+	--table-name Instances \
+	--key '{ "InstanceID" : { "S" : "i-abcdef" } }' \
+	--condition-expression 'InstanceStatus = :DyingStatus' \
+	--expression-attribute-values '{ ":DyingStatus" : { "S" : "DYING" } }' \
+	--return-consumed-capacity TOTAL
