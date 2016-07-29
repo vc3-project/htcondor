@@ -16,6 +16,329 @@ New features will be added in the 8.5.x development series.
 The details of each version are described below.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection*{\label{sec:New-8-4-9}Version 8.4.9}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\noindent Release Notes:
+
+\begin{itemize}
+
+\item HTCondor version 8.4.9 not yet released.
+%\item HTCondor version 8.4.9 released on Month Date, 2016.
+
+\end{itemize}
+
+
+\noindent New Features:
+
+\begin{itemize}
+
+\item None.
+
+\end{itemize}
+
+\noindent Bugs Fixed:
+
+\begin{itemize}
+
+\item Fixed a bug whereby the \Condor{collector} process would exit with an error several times per hour if config knob \Macro{NO\_DNS} is set to True.
+\Ticket{5762}
+
+\item Fixed a bug that could cause the wrong dynamic slots to be preempted
+for a match when \MacroNI{ALLOW\_PSLOT\_PREEMPTION} is set to \Expr{True}.
+\Ticket{5748}
+
+\item Fixed a bug that could cause the \Condor{master} to crash after
+restarting the \Condor{shared\_port} daemon.
+\Ticket{5801}
+
+\item Fixed a bug in \Prog{cream\_gahp} that caused it to delegate
+RFC-format X.509 proxies incorrectly to the CREAM service.
+\Ticket{5773}
+
+item Fixed a bug in the Windows build that was assigning the same Windows version
+info to all binaries built in a single directory. This resulted in crash boxes
+for most of the HTCondor tools being reported as a crash of \Condor{gpu\_discovery}
+\Ticket{5795}
+
+\end{itemize}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection*{\label{sec:New-8-4-8}Version 8.4.8}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\noindent Release Notes:
+
+\begin{itemize}
+
+\item HTCondor version 8.4.8 released on July 5, 2016.
+
+\end{itemize}
+
+
+\noindent New Features:
+
+\begin{itemize}
+
+\item None.
+
+\end{itemize}
+
+\noindent Bugs Fixed:
+
+\begin{itemize}
+
+\item Fixed a memory leak in the condor\_q client code that impacted
+users of the Python API call htcondor.Schedd().query().
+\Ticket{5727}
+
+\item Fixed a bug that caused file transfers to fail when using Bosco.
+\Ticket{5710}
+
+\item Fixed a bug that could cause the \Condor{schedd} to crash when using
+\MacroNI{SCHEDD\_CRON\_JOBLIST}.
+\Ticket{5715}
+
+\item The \Condor{schedd} now rejects job submissions when the job owner
+doesn't have a user account on the machine.
+Previously, the \Condor{schedd} would accept such jobs and then fail
+to run them.
+\Ticket{5734}
+
+\item Fixed a bug introduced in the 8.4.7 release that resulted in the remote
+\Condor{history} command failing unless the \Opt{-limit} argument is used.
+\Ticket{5735}
+
+\item Fixed a bug in \Condor{history} that caused it to treat all unrecognized arguments
+as user names
+\Ticket{5706}
+
+\item The high-availability daemon now properly detects changes to the
+\MacroNI{HAD\_LIST} when reconfigured.
+\Ticket{5753}
+
+\item The high-availability daemon now properly internalizes the
+\MacroNI{HAD\_LIST} when reconfigured.
+\Ticket{5754}
+
+\item Fixed a bug that caused the \Condor{master} to stop responding after it
+restarted a child daemon when shared port is enabled on Windows. This bug could also
+result in a hang on shutdown.
+\Ticket{5713}
+
+\item Fixed a bug that could cause \Condor{status} or \Condor{q} to
+crash when the \Opt{-xml} option is used.
+\Ticket{5718}
+
+\item Fixed a bug introduced in the 8.4.7 release that resulted in a parse error from \Condor{submit}
+when \Attr{JobAdInformationAttrs} was set in the configuration variable \Macro{SUBMIT\_ATTRS}.
+\Ticket{5720}
+
+\end{itemize}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection*{\label{sec:New-8-4-7}Version 8.4.7}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\noindent Release Notes:
+
+\begin{itemize}
+
+\item HTCondor version 8.4.7 released on June 6, 2016.
+
+\end{itemize}
+
+
+\noindent New Features:
+
+\begin{itemize}
+
+\item Docker universe jobs now drop all Linux capabilities by default.
+The new knob DOCKER\_DROP\_ALL\_CAPABILITIES, which defaults to true
+can be set to false to revert to the old behavior.
+\Ticket{5679}
+
+\item Added configuration variable \MacroNI{MAX\_TIME\_SKIP} to control 
+	how much system clock skip is allowed before the HTCondor daemons
+	restart.  See Section~\ref{param:MaxTimeSkip} for more information.
+
+\item On Linux, HTCondor appropriately tunes kernel parameters
+root\_maxkeys and root\_maxbytes to prevent \Condor{master} 
+startup failures on older Linux kernels.
+\Ticket{5671}
+
+\item The configuration variable \MacroNI{SUBMIT\_ATTRS} now understands the +Attr
+syntax that \Condor{submit} uses to inject attributes directly into the job ClassAd.
+\Ticket{5694}
+
+\item The \Condor{submit} variable \MacroNI{job\_lease\_duration} can now be an
+expression.
+\Ticket{5694}
+
+\end{itemize}
+
+\noindent Bugs Fixed:
+
+\begin{itemize}
+
+\item All \$function macro substitutions in in configuration files
+will now correctly handle variables with subsystem and localname prefixes
+as well as self references.  In particular \verb@VAR = $F(VAR)@ now substitutes
+correctly rather than hanging forever.
+\Ticket{5565}
+
+\item Fixed a bug in Docker universe where the job would
+not run with the correct group id.
+\Ticket{5649}
+
+\item Fixed a performance problem in the \Condor{schedd} that could
+cause it to become unresponsive for several minutes after the
+set of significant attributes for negotiation changes.
+\Ticket{5648}
+
+\item Fixed a bug where the python bindings ClassAd parser would fail to detect
+whether old or new format ClassAds were present in a stream, even though the
+ClassAd format was specified in advance.
+\Ticket{5643}
+
+\item Fixed a bug where some floating point values would have an extra
+\Expr{.0} appended to the end when printed (e.g. \Expr{2E40.0}).
+These values could not be read properly by normal number parsing functions.
+\Ticket{5682}
+
+\item When using \MacroNI{GRIDMANAGER\_SELECTION\_EXPR}, grid ads from
+different \Condor{gridmanager} instances will no longer overwrite
+each other in the \Condor{collector}.
+\Ticket{5683}
+
+\item In addition to logging to the file \MacroNI{KERNEL\_TUNING\_LOG},
+the default \MacroNI{LINUX\_KERNEL\_TUNING\_SCRIPT} now also logs to
+syslog and \File{/etc/systcl.d/99-htcondor.conf}.
+\Ticket{5489}
+
+\item Fixed a bug on \Condor{history} that could result in truncation of
+the job id field.
+\Ticket{5527}
+
+\item On Windows, configuring HTCondor to restrict the range of outbound
+port numbers may cause substantial delays when using the command-line
+tools.  Since we now know that it's not free to do so, \MacroNI{LOWPORT}
+and \MacroNI{HIGHPORT} no longer restrict the port numbers of outbound
+connections on Windows.  If you still require this functionality, use
+\MacroNI{OUT\_LOWPORT} and \MacroNI{OUT\_HIGHPORT}.
+\Ticket{4711}
+
+\item Fixed a bug that would cause \Condor{submit} to create extra, incorrectly named
+output and error files when \verb@$$@ substitution is used as part of the filenames.
+\Ticket{2720}
+
+\item Fixed a bug that would cause the \Condor{history\_helper} to be invoked using
+the wrong name on Windows
+\Ticket{5656}
+
+\item Fixed a bug that would sometimes cause configuration variables with a subsystem prefix
+to be ignored.
+\Ticket{5310}
+
+\item Fixed a bug that could cause HAD to fail if a machine has an IPv6
+address.
+\Ticket{5659}
+
+\item Fixed a bugs in \Condor{history} when fetching history from a remote \Condor{schedd}. The
+bugs caused complete failure when the remote \Condor{schedd} was running Windows, and
+would corrupt some string values when the remote \Condor{schedd} was any other operating system.
+\Ticket{5701}
+
+\end{itemize}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection*{\label{sec:New-8-4-6}Version 8.4.6}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\noindent Release Notes:
+
+\begin{itemize}
+
+\item HTCondor version 8.4.6 released on April 21, 2016.
+
+\end{itemize}
+
+
+\noindent New Features:
+
+\begin{itemize}
+
+\item \Condor{advertise} \Opt{-multiple} now tolerates multiple blank lines in the
+input file. It no longer quits parsing on the first first blank line that does not
+follow a valid ClassAd.
+\Ticket{5147}
+
+\end{itemize}
+
+
+\noindent Bugs Fixed:
+
+\begin{itemize}
+
+\item Fixed bug where when partitionable slots were
+enabled in the \Condor{startd}, a job would be unable
+to start running on that machine in some cases.
+\Ticket{5626}
+
+\item Fixed a bug that would cause the \Condor{startd}
+to crash when \Macro{ALLOW\_PSLOT\_PREEMPTION} was enabled.
+\Ticket{5586}
+
+\item Fixed a bug introduced in version 8.3 that
+removed the attribute \Macro{REMOTE\_GROUP\_RESOURCES\_IN\_USE}
+from the job ad in the negotiator.
+\Ticket{5593}
+
+\item Fixed a bug where HTCondor would regard as invalid text representations
+of IPv6 addresses which were the longest possible.  This bug typically
+manifested as a failure to contact hosts which were advertising IPv6 addresses
+of this sort.
+\Ticket{5585}
+
+\item Fixed a memory leak in the \Condor{negotiator} when
+\Macro{ALLOW\_PSLOT\_PREEMPTION} was enabled.
+\Ticket{5571}
+
+\item Fixed a bug where after a \Condor{schedd} restart
+the submitter attribute \Macro{WEIGHTED\_JOBS\_RUNNING}
+would be incorrectly computed.
+\Ticket{5637}
+
+\item Fixed a bug when using \MacroNI{CLAIM\_PARTITIONABLE\_LEFTOVERS}
+and flocking.
+Machines from a remote pool could be treated as if they were in the local
+pool.
+As a result, the \Attr{RemotePool} attribute would not be set in the ads
+of jobs running on these machines, and the \Attr{FlockedJobs} and
+\Attr{RunningJobs} attributes of submitter ads would have incorrect
+values.
+\Ticket{5577}
+
+\item Fixed a bug that could cause a job's supplemental groups to be set
+incorrectly when \MacroNI{SOFT\_UID\_DOMAIN} is set to \Expr{True}.
+\Ticket{5603}
+
+\item Fixed a bug that caused supplemental groups to be set incorrectly
+when executing file transfer plugins and various hooks.
+\Ticket{5600}
+
+\item Fixed a bug that resulted in Windows 10 being reported as
+WindowsUnknown in the \Attr{OPSYSNAME} attribute of the \Condor{startd}
+ClassAd.
+\Ticket{5575}
+
+\item Fixed a typo in the \MacroNI{LIMIT\_JOB\_RUNTIMES} policy metaknob
+that prevented the policy from working as intended.
+\Ticket{5307}
+
+\end{itemize}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \subsection*{\label{sec:New-8-4-5}Version 8.4.5}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -23,8 +346,7 @@ The details of each version are described below.
 
 \begin{itemize}
 
-\item HTCondor version 8.4.5 not yet released.
-%\item HTCondor version 8.4.5 released on Month Date, 2016.
+\item HTCondor version 8.4.5 released on March 22, 2016.
 
 \end{itemize}
 
@@ -45,12 +367,63 @@ longer required on user logs.
 
 \begin{itemize}
 
-\item Fixed a bug that would cause schedds flocking to remote
+\item Fixed a bug where HTCondor would unconditionally retry non-successful
+DNS lookups of the local system's hostname; this could cause delays of up
+to sixty seconds when using command-line tools on systems whose hostname
+was not in DNS.  We no longer retry on errors at all, and only retry
+failures which are temporary.
+\Ticket{5553}
+
+\item Fixed a bug that would cause \Condor{schedd}s flocking to remote
 pools to not send no jobs, or fewer jobs than possible to the
 remote pool. This was a result of not correctly setting
 the submitter attribute \Macro{WeightedJobsRunning} for
 flocked pools.
 \Ticket{5539}
+
+\item Accounting group names that contain spaces are now rejected by
+\Condor{submit} and ignored by the \Condor{negotiator}.
+Previously, submitting a job with an accounting group name that contained
+a space would cause the \Condor{negotiator} to fail at startup.
+\Ticket{5538}
+
+\item Fixed a bug whereby per-job history files (enabled by
+the configuration setting \Macro{PER\_JOB\_HISTORY\_DIR}) may briefly
+appear to be empty or incomplete.
+\Ticket{5562}
+
+\item Fixed a bug whereby ClassAds written into history files
+may contain the same attribute multiple times.
+\Ticket{5548}
+
+\item Fixed a bug that caused DAGMan to not work correctly with
+some local universe node jobs.  (This bug was introduced in version
+8.3.0.)
+\Ticket{5299}
+
+\item Fixed a bug that resulted in jobs managed by the \Condor{job\_router}
+not reporting memory and disk usage of the job correctly.
+\Ticket{5552}
+
+\item Reworked a bug fix from the 8.4.3 release that was designed to allow for
+more than 100 dynamic slots to be a bit more generous in allocating Disk to
+those slots.
+Now, those slots are less prone to fail to match subsequent jobs.
+\Ticket{5535}
+
+\item Fixed a bug in the randomization of ports within the LOWPORT to HIGHPORT range
+that would sometimes generate ports outside of this range on Windows.
+\Ticket{5555}
+
+\item Fixed a bug in \Condor{off} \Opt{-peaceful} that could result in never
+sending the "off" command to machines when at least one of the machines could
+not be contacted when sending the previous "peaceful" command.
+\Ticket{5504}
+
+\item When cgroups are in use, limit the amount of file system cache in the
+kernel to prevent the OOM killer from killing jobs that use a large amount of
+file system cache.
+\Ticket{5500}
 
 \end{itemize}
 

@@ -633,6 +633,9 @@
 /* Define to 1 if the OS has support for the TCP_KEEPINTVL setsockopt */
 #cmakedefine HAVE_TCP_KEEPINTVL
 
+/* Define to 1 if /usr/include/sd-daemon.h exists.  Enables systemd integration */
+#cmakedefine HAVE_SD_DAEMON_H
+
 /* Define to 1 if the OS has support for the TCP_USER_TIMEOUT setsockopt */
 #cmakedefine HAVE_TCP_USER_TIMEOUT
 
@@ -670,5 +673,6 @@
 #cmakedefine LIBGLOBUS_GSSAPI_GSI_SO "${LIBGLOBUS_GSSAPI_GSI_SO}"
 #cmakedefine LIBGLOBUS_GSS_ASSIST_SO "${LIBGLOBUS_GSS_ASSIST_SO}"
 #cmakedefine LIBVOMSAPI_SO "${LIBVOMSAPI_SO}"
+#cmakedefine LIBSYSTEMD_DAEMON_SO "${LIBSYSTEMD_DAEMON_SO}"
 
 #endif

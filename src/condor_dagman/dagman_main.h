@@ -214,8 +214,8 @@ class Dagman {
 		// script for the node fails.
 	bool _runPost;
 
-		// Default priority that DAGman uses for nodes.
-	int _defaultPriority;
+		// Priority for this DAG.
+	int _priority;
 
 	int _claim_hold_time;
 
@@ -225,6 +225,9 @@ class Dagman {
 		// True iff we want to suppress jobs from writing to the
 		// log files specified in their submit files (see gittrac #4353).
 	bool _suppressJobLogs;
+
+		// Batch-name for this workflow.
+	MyString _batchName;
 
 	DagmanClassad *_dagmanClassad;
 };

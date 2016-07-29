@@ -27,8 +27,8 @@
 #define MAXOWNERLEN 20
 #define MAXSCHEDDLEN 255
 
-// This is for the getFilterAndProcess function
-// the caller will return false to take ownership of ad, true otherwise.
+// This callback signature is for the getFilterAndProcess function.
+// This callback should return false to take ownership of ad, true otherwise.
 // we do this to avoid a makeing a copy of the ad in a common use case,
 // because the caller will normally delete the ad, but in fact has no more use for it.
 typedef bool (*condor_q_process_func)(void*, ClassAd *ad);
@@ -129,7 +129,7 @@ class CondorQ
 	time_t scheddBirthdate;
 	
 	// helper functions
-	int fetchQueueFromHostAndProcessV2 ( const char * host, const char * constraint, StringList &attrs, int fetch_opts, int match_limit, condor_q_process_func process_func, void * process_func_data, int connect_timeout, CondorError* errstack = 0);
+	int fetchQueueFromHostAndProcessV2 ( const char * host, const char * constraint, StringList &attrs, int fetch_opts, int match_limit, condor_q_process_func process_func, void * process_func_data, int connect_timeout, int useFastPath, CondorError* errstack = 0);
 	int getAndFilterAds( const char *, StringList &attrs, int match_limit, ClassAdList &, int useAll );
 	int getFilterAndProcessAds( const char *, StringList &attrs, int match_limit, condor_q_process_func pfn, void * process_func_data, bool useAll );
 };

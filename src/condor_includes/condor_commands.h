@@ -177,6 +177,7 @@ NAMETABLE_DIRECTIVE:TABLE:DCTranslation
 #define QUERY_JOB_ADS (SCHED_VERS+116)
 #define SWAP_CLAIM_AND_ACTIVATION (SCHED_VERS+117) // swap claim & activation between two STARTD resources, for moving a job into a 'transfer' slot.
 #define SEND_RESOURCE_REQUEST_LIST	(SCHED_VERS+118)     // used in negotiation protocol
+#define QUERY_JOB_ADS_WITH_AUTH (SCHED_VERS+119) // Same as QUERY_JOB_ADS but requires authentication
 
 // values used for "HowFast" in the draining request
 #define DRAIN_GRACEFUL 0
@@ -500,6 +501,7 @@ NAMETABLE_DIRECTIVE:END_SECTION:collector
 #define CREDD_GET_CRED (CREDD_BASE+1)
 #define CREDD_REMOVE_CRED (CREDD_BASE+2)
 #define CREDD_QUERY_CRED (CREDD_BASE+3)
+#define CREDD_REFRESH_ALL (CREDD_BASE+20)
 #define CREDD_GET_PASSWD (CREDD_BASE+99)	// used by the Win32 credd only
 #define CREDD_NOP (CREDD_BASE+100)			// used by the Win32 credd only
 

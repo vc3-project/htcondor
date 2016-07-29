@@ -217,6 +217,8 @@ void CondorResource::PublishResourceAd( ClassAd *resource_ad )
 	if ( proxyFQAN ) {
 		resource_ad->Assign( ATTR_X509_USER_PROXY_FQAN, proxyFQAN );
 	}
+
+	gahp->PublishStats( resource_ad );
 }
 
 void CondorResource::CondorRegisterJob( CondorJob *job, const char *submitter_id )
@@ -501,6 +503,12 @@ dprintf(D_FULLDEBUG,"*** DoUpdateLeases called\n");
 
 	update_delay = 0;
 
+	if ( leaseUpdates.IsEmpty() ) {
+		dprintf( D_FULLDEBUG, "*** Job lease list empty, returning success immediately\n" );
+		update_complete = true;
+		return;
+	}
+
 	if ( updateLeasesCmdActive == false ) {
 		leaseUpdates.Rewind();
 		while ( leaseUpdates.Next( curr_job ) ) {
@@ -508,11 +516,8 @@ dprintf(D_FULLDEBUG,"*** DoUpdateLeases called\n");
 				//   BaseJob, BaseResource can skip jobs that don't have a
 				//   a remote-job-id yet
 			if ( ((CondorJob*)curr_job)->remoteJobId.cluster != 0 ) {
-				int exp = 0;
 				jobs.Append( ((CondorJob*)curr_job)->remoteJobId );
-				curr_job->jobAd->LookupInteger( ATTR_JOB_LEASE_EXPIRATION,
-												exp );
-				expirations.Append( exp );
+				expirations.Append( m_sharedLeaseExpiration );
 			}
 		}
 	}

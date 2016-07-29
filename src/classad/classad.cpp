@@ -287,7 +287,7 @@ InsertAttr( const string &name, int value, Value::NumberFactor f )
 	val.SetIntegerValue( value );
 	plit  = Literal::MakeLiteral( val, f );
 	
-	return( Insert( name, plit ) );
+	return( Insert( name, plit, false ) );
 }
 
 
@@ -299,7 +299,7 @@ InsertAttr( const string &name, long value, Value::NumberFactor f )
 
 	val.SetIntegerValue( value );
 	plit = Literal::MakeLiteral( val, f );
-	return( Insert( name, plit ) );
+	return( Insert( name, plit, false ) );
 }
 
 
@@ -311,7 +311,7 @@ InsertAttr( const string &name, long long value, Value::NumberFactor f )
 
 	val.SetIntegerValue( value );
 	plit = Literal::MakeLiteral( val, f );
-	return( Insert( name, plit ) );
+	return( Insert( name, plit, false) );
 }
 
 
@@ -357,7 +357,7 @@ InsertAttr( const string &name, double value, Value::NumberFactor f )
 	val.SetRealValue( value );
 	plit  = Literal::MakeLiteral( val, f );
 	
-	return( Insert( name, plit ) );
+	return( Insert( name, plit, false ) );
 }
 	
 
@@ -383,7 +383,7 @@ InsertAttr( const string &name, bool value )
 	val.SetBooleanValue( value );
 	plit  = Literal::MakeLiteral( val );
 	
-	return( Insert( name, plit ) );
+	return( Insert( name, plit, false ) );
 }
 
 
@@ -408,7 +408,7 @@ InsertAttr( const string &name, const char *value )
 	val.SetStringValue( value );
 	plit  = Literal::MakeLiteral( val );
 	
-	return( Insert( name, plit ) );
+	return( Insert( name, plit, false ) );
 }
 
 bool ClassAd::
@@ -428,7 +428,7 @@ InsertAttr( const string &name, const string &value )
 	val.SetStringValue( value );
 	plit  = Literal::MakeLiteral( val );
 	
-	return( Insert( name, plit ) );
+	return( Insert( name, plit, false ) );
 }
 
 
@@ -636,6 +636,20 @@ Lookup( const string &name ) const
 	return tree;
 }
 
+ExprTree *ClassAd::
+LookupIgnoreChain( const string &name ) const
+{
+	ExprTree *tree;
+	AttrList::const_iterator itr;
+
+	itr = attrList.find( name );
+	if (itr != attrList.end()) {
+		tree = itr->second;
+	} else {
+		tree = NULL;
+	}
+	return tree;
+}
 
 ExprTree *ClassAd::
 LookupInScope( const string &name, const ClassAd *&finalScope ) const

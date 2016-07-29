@@ -97,6 +97,15 @@ customization=seldom
 friendly_name=Preen Interval
 review=?
 
+[DEFAULT_MASTER_SHUTDOWN_SCRIPT]
+default=
+type=path
+reconfig=true
+customization=seldom
+friendly_name=Program to execute upon condor_master shutdown
+review=?
+tags=master
+
 [MASTER_NEW_BINARY_DELAY]
 default=120
 type=int
@@ -684,7 +693,7 @@ review=?
 tags=starter,starter_common
 
 [STARTER_DEBUG]
-default=D_PID
+default=D_PID 
 type=string
 reconfig=true
 customization=seldom
@@ -866,7 +875,7 @@ tags=dagman,condor_submit_dag
 default=
 type=path
 reconfig=false
-customization=seldom
+customization=normal
 friendly_name=Dagman Config File
 review=?
 tags=dagman,dagman_main,condor_submit_dag
@@ -991,17 +1000,26 @@ friendly_name=Dagman Pending Report Interval
 review=?
 tags=dagman,dagman_main
 
+[MAX_DAGMAN_LOG]
+default=0
+type=int
+reconfig=false
+customization=seldom
+friendly_name=Max Dagman Log
+review=?
+tags=dagman,dagman_main
+
 [DAGMAN_ALLOW_LOG_ERROR]
 default=false
 type=bool
 reconfig=false
-customization=seldom
+customization=never
 friendly_name=Dagman Allow Log Error
 review=?
 tags=dagman,dagman_main
 
 [DAGMAN_ALWAYS_RUN_POST]
-default=true
+default=false
 type=bool
 reconfig=false
 customization=seldom
@@ -1040,7 +1058,7 @@ tags=dagman,dagman_main
 default=@(DAG_DIR)/@(DAG_FILE).nodes.log
 type=path
 reconfig=false
-customization=expert
+customization=seldom
 friendly_name=Dagman Default Node Log
 review=?
 tags=dagman,dagman_main
@@ -1169,6 +1187,15 @@ type=int
 reconfig=false
 customization=seldom
 friendly_name=Dagman Submit Delay
+review=?
+tags=dagman,dagman_main
+
+[DAGMAN_SUPPRESS_JOB_LOGS]
+default=false
+type=bool
+reconfig=false
+customization=normal
+friendly_name=Dagman Suppress Job Logs
 review=?
 tags=dagman,dagman_main
 
@@ -1961,6 +1988,16 @@ customization=seldom
 friendly_name=Startd Factory Script Back Partition
 review=?
 tags=startd_factory,startd_factory
+
+[MAX_TIME_SKIP]
+default=1200
+range=0,
+type=int
+reconfig=true
+customization=seldom
+friendly_name=Max seconds system clock can skip without a restart
+review=?
+tags=daemon_core
 
 [ENABLE_SOAP_SSL]
 default=false
@@ -2803,15 +2840,6 @@ friendly_name=Cream Gahp
 review=?
 tags=gridmanager,creamjob
 
-[DELTACLOUD_GAHP]
-default=$(SBIN)/deltacloud_gahp
-type=path
-reconfig=true
-customization=seldom
-friendly_name=Deltacloud Gahp
-review=?
-tags=gridmanager,deltacloudjob
-
 [COLLECTOR_HOST]
 default=$(CONDOR_HOST)
 type=string
@@ -3386,7 +3414,7 @@ default=
 type=string
 reconfig=true
 customization=seldom
-friendly_name=Startd Cron Name
+friendly_name=Obsolete Startd Cron Name
 review=?
 tags=startd,startd_cronmgr
 
@@ -4474,6 +4502,15 @@ friendly_name=Replication Interval
 review=?
 tags=had,ReplicatorStateMachine
 
+[NEGOTIATOR_CROSS_SLOT_PRIOS]
+default=false
+type=bool
+reconfig=true
+customization=seldom
+friendly_name=Negotiator Advertise Cross Slot User Prios
+review=?
+tags=negotiator,matchmaker
+
 [NEGOTIATOR_INTERVAL]
 default=60
 type=int
@@ -5090,6 +5127,24 @@ customization=seldom
 friendly_name=Queue All Users Trusted
 review=?
 tags=schedd,qmgmt
+
+[SYSTEM_SECURE_JOB_ATTRS]
+default=
+type=string
+reconfig=true
+customization=never
+friendly_name=Job attributes that only the Schedd can change
+review=?
+tags=schedd,qmgmt,qedit
+
+[SECURE_JOB_ATTRS]
+default=
+type=string
+reconfig=true
+customization=seldom
+friendly_name=Job attributes that only the Schedd can change
+review=?
+tags=schedd,qmgmt,qedit
 
 [SYSTEM_IMMUTABLE_JOB_ATTRS]
 default=Owner ClusterId ProcId MyType TargetType
@@ -5722,6 +5777,20 @@ friendly_name=Shadow Log
 review=?
 tags=shadow,log
 
+[SHADOW_STATS_LOG]
+default=$(LOG)/XferStatsLog
+type=path
+friendly_name=Log file of Xfer stats
+review=?
+tags=shadow,log
+
+[STARTER_STATS_LOG]
+default=$(LOG)/XferStatsLog
+type=path
+friendly_name=Log file of Xfer stats
+review=?
+tags=starter,log
+
 [STARTD_LOG]
 default=$(LOG)/StartLog
 type=path
@@ -6332,8 +6401,15 @@ customization=seldom
 friendly_name=
 review=?
 
+[LOG_TO_SYSLOG]
+default=false
+type=bool
+reconfig=true
+customization=seldom
+friendly_name=Send all logs to syslog instead of files
+
 [LOCAL_CONFIG_DIR_EXCLUDE_REGEXP]
-default=^((\..*)|(.*~)|(#.*)|(.*\.rpmsave)|(.*\.rpmnew)|(.*\.dpkg-old)|(.*\.dpkg-dist)|(.*\.cfsaved))$
+default=^((\..*)|(.*\.pl)|(.*\.py)|(.*\.sh)|(.*~)|(#.*)|(.*\.rpmsave)|(.*\.rpmnew)|(.*\.dpkg-old)|(.*\.dpkg-dist)|(.*\.cfsaved))$
 type=string
 reconfig=true
 customization=seldom
@@ -7343,6 +7419,26 @@ friendly_name=Timeout for prefetch requests lists phase of negotiator
 review=?
 tags=negotiator,matchmaker
 
+[HISTORY_HELPER]
+default=$(BIN)/condor_history
+win32_default=$(BIN)\condor_history.exe
+type=path
+reconfig=true
+customization=devel
+friendly_name=location of condor history helper executable used by remote condor_history
+review=?
+tags=schedd
+
+[OLD.HISTORY_HELPER]
+default=$(LIBEXEC)/condor_history_helper
+win32_default=$(LIBEXEC)\condor_history_helper.exe
+type=path
+reconfig=true
+customization=devel
+friendly_name=location of history helper executable
+review=?
+tags=schedd
+
 [HISTORY_HELPER_MAX_HISTORY]
 default=10000
 range=0,
@@ -7377,6 +7473,13 @@ type=bool
 reconfig=false
 friendly_Name=Whether condor_q will query all jobs, or only the current owners jobs by default
 usage=Set to true to have condor_q query only the owners jobs by default
+
+[CONDOR_Q_DASH_BATCH_IS_DEFAULT]
+default=true
+type=bool
+reconfig=false
+friendly_Name=Whether condor_q will default to -batch display
+usage=Set to true to have condor_q defaulit to -batch display
 
 [ENABLE_IPV6]
 default=auto
@@ -7418,12 +7521,20 @@ friendly_name=Ignore target protocol preference
 usage=Should HTCondor ignore the target's listed protocol preferences?
 tags=daemon_core
 
+[IGNORE_DNS_PROTOCOL_PREFERENCE]
+default=$(PREFER_IPV4)
+version=8.5.3
+reconfig=false
+friendly_name=Ignore target protocol preference
+usage=Should HTCondor ignore the protocol order returned by DNS?
+tags=daemon_core
+
 [PREFER_OUTBOUND_IPV4]
 default=$(PREFER_IPV4)
 version=8.5.3
 reconfig=false
 friendly_name=Prefer to connect over IPv4
-usage=Should HTCondor prefer IPv4 if it's ignoring the target's preferences?
+usage=Should HTCondor prefer IPv4 when ignoring preferences?
 tags=daemon_core
 
 [JOB_EXECDIR_PERMISSIONS]
@@ -7494,6 +7605,13 @@ customization=seldom
 friendly_name=Docker
 review=?
 
+[DOCKER_DROP_ALL_CAPABILITIES]
+default=true
+type=bool
+reconfig=true
+customization=seldom
+friendly_name=Docker drop all capabilities
+
 [SUBMIT_REQUIREMENT_NAMES]
 default=
 type=string
@@ -7521,6 +7639,11 @@ review=?
 default=/tmp/CGAHPLog.$(USERNAME)
 win32_default=NUL
 review=?
+
+[C_GAHP_DEBUG]
+default=D_STATS
+review=?
+
 [C_GAHP_LOCK]
 default=/tmp/CGAHPLock.$(USERNAME)
 win32_default=NUL
@@ -7594,12 +7717,28 @@ friendly_name=Location of the High-Availability daemon
 type=path
 review=?
 
+[HAD_SOCKET_NAME]
+default=$(LOCALNAME:had)
+type=string
+
+[HAD_ARGS]
+default=-sock $(HAD_SOCKET_NAME)
+type=string
+
 [REPLICATION]
 default=$(SBIN)/condor_replication
 win32_default=$(SBIN)\condor_replication.exe
 friendly_name=Location of the Replication daemon
 type=path
 review=?
+
+[REPLICATION_SOCKET_NAME]
+default=$(LOCALNAME:replication)
+type=string
+
+[REPLICATION_ARGS]
+default=-sock $(REPLICATION_SOCKET_NAME)
+type=string
 
 [TRANSFERER]
 default=$(LIBEXEC)/condor_transferer
@@ -7815,9 +7954,14 @@ default=/tmp/EC2GahpLog.$(USERNAME)
 win32_default=NUL
 review=?
 
+[EC2_GAHP_DEBUG]
+default=D_PID
+review=?
+
 [GT2_GAHP]
 default=$(SBIN)/gahp_server
 review=?
+
 [EC2_GAHP]
 default=$(SBIN)/ec2_gahp
 review=?
@@ -8120,6 +8264,445 @@ default=((SubmitterGroup =?= RemoteGroup) && ($(StateTimer) > (1 * $(HOUR))) && 
 [UWCS_PREEMPTION_RANK]
 default=(RemoteUserPrio * 1000000) - ifThenElse(isUndefined(TotalJobRuntime), 0, TotalJobRuntime)
 
+######
+## add metaknobs below this banner
+##
+## as of 8.5.6 metaknobs can take arguments like this
+##   use FEATURE : Knob(arg1, , arg3)
+## where arg1 and arg2 are substituted in the knob definition where it has $(1) and $(2)
+## The permitted metaknob arg substitutions are
+##   $(0)  all arguments. '$(0)' is replaced with 'arg1, , arg3' in the above example
+##   $(0?) args are non-empty. '$(0?)' replaced with '1' in the above example. it would be '0' configuration had use FEATURE:Knob or use FEATURE:Knob()
+##   $(0#) num args. '$(0#)' is replaced with '3' in the above example. it would be '0' if configuration had use FEATURE : Knob
+##   $(1)  first arg. '$(1)' is replaced with 'arg1' in the above example
+##   $(1?) first arg is non-empty. '$(1?)' is replaced with '1' in the above example
+##   $(1+) args from first arg. '$(1+)' is replaced with 'arg1, , arg3' in the above example. $(1+) and $(0) are equivalent
+##   $(2)  first arg. '$(2)' is replaced with '' in the above example
+##   $(2?) second arg is non-empty. '$(2?)' is replaced with '0' in the above example
+##   $(2+) args from second arg. '$(2+)' is replaced with ', arg3' in the above example
+##   $(3) third arg. '$(3)' is replaced with 'arg3' in the above example
+##   $(3?) third arg is non-empty '$(3?)' is replaced with '1' in the above example
+## When a metaknob is not passed any arguments, all '$(N)' macros expand to '', all '$(0#)' and '$(N?)' macros expand to '0'
+######
+
+[$POLICY.DESKTOP]
+# use the UWCS desktop preemption policy
+friendly_name=Use the UWCS preemption policy
+default : @end
+	WANT_SUSPEND=($(SmallJob) || $(KeyboardNotBusy) || $(IsVanilla) ) && ( $(SUSPEND))
+	WANT_VACATE=$(ActivationTimer) > 600 || $(IsVanilla)
+	SUSPEND=($(KeyboardBusy) || ( (CpuBusyTime > 120) && $(ActivationTimer) > 90))
+	CONTINUE=($(CPUIdle) && ($(ActivityTimer) > 10) && (KeyboardIdle > $(ContinueIdleTime)))
+	PREEMPT=(((Activity == "Suspended") && ($(ActivityTimer) > $(MaxSuspendTime))) || (SUSPEND && (WANT_SUSPEND == False)))
+	START=((KeyboardIdle > $(StartIdleTime)) && ( $(CPUIdle) || (State != "Unclaimed" && State != "Owner")) )
+	KILL=False
+	MaxJobRetirementTime=0
+	CLAIM_WORKLIFE=
+	SLOTS_CONNECTED_TO_KEYBOARD=$(NUM_CPUS)
+@end
+review=?
+
+# no-preemption policy, formerly called TESTINGMODE_
+[$POLICY.ALWAYS_RUN_JOBS]
+friendly_name=Use a no-preemption policy
+default : @end
+	WANT_SUSPEND=False
+	WANT_VACATE=True
+	SUSPEND=False
+	CONTINUE=True
+	PREEMPT=False
+	START=True
+	KILL=False
+	PREEMPTION_REQUIREMENTS=False
+	NEGOTIATOR_CONSIDER_PREEMPTION=False
+	MaxJobRetirementTime=0
+	CLAIM_WORKLIFE=1200
+@end
+review=?
+
+[$POLICY.UWCS_DESKTOP]
+friendly_name=Run jobs only when the user is away from their machine
+default : @end
+	WANT_SUSPEND=$(UWCS_WANT_SUSPEND)
+	WANT_VACATE=$(UWCS_WANT_VACATE)
+	SUSPEND=$(UWCS_SUSPEND)
+	CONTINUE=$(UWCS_CONTINUE)
+	PREEMPT=$(UWCS_PREEMPT)
+	START=$(UWCS_START)
+	KILL=$(UWCS_KILL)
+	PERIODIC_CHECKPOINT=$(UWCS_PERIODIC_CHECKPOINT)
+	PREEMPTION_REQUIREMENTS=$(UWCS_PREEMPTION_REQUIREMENTS)
+	PREEMPTION_RANK=$(UWCS_PREEMPTION_RANK)
+	NEGOTIATOR_PRE_JOB_RANK=$(UWCS_NEGOTIATOR_PRE_JOB_RANK)
+	NEGOTIATOR_POST_JOB_RANK=$(UWCS_NEGOTIATOR_POST_JOB_RANK)
+	MaxJobRetirementTime=$(UWCS_MaxJobRetirementTime)
+	CLAIM_WORKLIFE=$(UWCS_CLAIM_WORKLIFE)
+	SLOTS_CONNECTED_TO_KEYBOARD=$(NUM_CPUS)
+@end
+review=?
+
+[$POLICY.LIMIT_JOB_RUNTIMES]
+friendly_name=Limit job runtimes to 24 hours
+default : @end
+	MAX_JOB_RUNTIME=24*3600
+	PREEMPT=(Activity == "Busy") && ((time() - EnteredCurrentActivity) > $(MAX_JOB_RUNTIME))
+@end
+review=?
+
+[$POLICY.PREEMPT_IF_CPUS_EXCEEDED]
+friendly_name=Preempt jobs that use more cpu cores than in slot
+default : @end
+  #
+  # Publish the number of CPU cores being used by the job into
+  # to slot ad as attribute "CpusUsage". This value will
+  # be the average number of cores used by the job over the
+  # past minute, sampling every 5 seconds, and rounded to two digits.
+  #
+  CpusUsage = ifthenelse( \
+     TotalLoadAvg > 0.0 && Activity!="Idle", \
+     int(CondorLoadAvg / TotalLoadAvg * \
+        ifthenelse(TotalLoadAvg < $(DETECTED_CORES), TotalLoadAvg, $(DETECTED_CORES)) \
+        * 100) / 100.0, \
+     0)
+  STARTD_ATTRS = $(STARTD_ATTRS) CpusUsage
+  #
+  # If the startd sees the number of CPU cores used by the job exceed the
+  # number of cores in the slot by more than 0.8, preempt the job
+  # immediately ignoring any retirement time.
+  #
+  CPU_EXCEEDED = (CpusUsage > Cpus + 0.8)
+  PREEMPT = ($(PREEMPT:False)) || $(CPU_EXCEEDED)
+  MAXJOBRETIREMENTTIME = ifthenelse($(CPU_EXCEEDED),0,$(MAXJOBRETIREMENTTIME:0))
+  WANT_SUSPEND = ($(WANT_SUSPEND:False)) && $(CPU_EXCEEDED) =!= TRUE
+@end
+review=?
+
+[$POLICY.HOLD_IF_CPUS_EXCEEDED]
+friendly_name=Hold jobs that use more cpu cores than in slot
+default : @end
+  use policy: preempt_if_cpus_exceeded
+  #
+  # If the startd preempted a job because CPU usage exceeded the number
+  # of cores in the slot, put the job on hold.
+  #
+  WANT_HOLD = ($(WANT_HOLD:False)) || $(CPU_EXCEEDED)
+  WANT_HOLD_REASON = ifThenElse($(CPU_EXCEEDED), \
+     $(HOLD_REASON_CPU_EXCEEDED:"cpu usage exceeded request_cpus"), \
+     $(WANT_HOLD_REASON:UNDEFINED))
+  WANT_HOLD_SUBCODE = ifThenElse($(CPU_EXCEEDED), \
+     $(HOLD_SUBCODE_CPU_EXCEEDED:101), \
+     $(WANT_HOLD_SUBCODE:UNDEFINED))
+@end
+review=?
+
+[$POLICY.PREEMPT_IF_MEMORY_EXCEEDED]
+friendly_name=Preempt jobs that use more memory than in slot
+default : @end
+  #
+  # If the startd sees the memory usage of the job exceed the
+  # memory in the slot, preempt the job immediately ignoring any retirement time.
+  #
+  MEMORY_EXCEEDED = (MemoryUsage =!= UNDEFINED && MemoryUsage > Memory)
+  PREEMPT = ($(PREEMPT:False)) || $(MEMORY_EXCEEDED)
+  MAXJOBRETIREMENTTIME = ifthenelse($(MEMORY_EXCEEDED),0,$(MAXJOBRETIREMENTTIME:0))
+  WANT_SUSPEND = ($(WANT_SUSPEND:False)) && $(MEMORY_EXCEEDED) =!= TRUE
+@end
+review=?
+
+[$POLICY.HOLD_IF_MEMORY_EXCEEDED]
+friendly_name=Hold jobs that use more memory than in slot
+default : @end
+  use policy: preempt_if_memory_exceeded
+  #
+  # If the startd preempted a job because memory usage exceeded the amount
+  # of memory in the slot, put the job on hold.
+  #
+  WANT_HOLD = ($(WANT_HOLD:False)) || $(MEMORY_EXCEEDED)
+  WANT_HOLD_REASON = ifThenElse($(MEMORY_EXCEEDED), \
+     $(HOLD_REASON_MEMORY_EXCEEDED:"memory usage exceeded request_memory"), \
+     $(WANT_HOLD_REASON:UNDEFINED))
+  WANT_HOLD_SUBCODE = ifThenElse($(MEMORY_EXCEEDED), \
+     $(HOLD_SUBCODE_MEMORY_EXCEEDED:102), \
+     $(WANT_HOLD_SUBCODE:UNDEFINED))
+@end
+review=?
+
+[$ROLE.Personal]
+friendly_name=Settings for Personal HTCondor (i.e. the whole pool is on a single machine)
+default : @end
+	CONDOR_HOST=127.0.0.1
+	COLLECTOR_HOST=$(CONDOR_HOST):0
+	DAEMON_LIST=MASTER COLLECTOR NEGOTIATOR STARTD SCHEDD
+	RunBenchmarks=0
+@end
+review=?
+
+[$ROLE.Execute]
+friendly_name=Settings for HTCondor Execute node
+default : @end
+	DAEMON_LIST=$(DAEMON_LIST) STARTD
+@end
+review=?
+
+[$ROLE.Submit]
+friendly_name=Settings for HTCondor Submit node
+default : @end
+	DAEMON_LIST=$(DAEMON_LIST) SCHEDD
+@end
+review=?
+
+[$ROLE.CentralManager]
+friendly_name=Settings for HTCondor Central Manager
+default : @end
+	DAEMON_LIST=$(DAEMON_LIST) COLLECTOR NEGOTIATOR
+@end
+review=?
+
+# default security policy
+[$SECURITY.HOST_BASED]
+friendly_name=Default (host based) Authorization policy based on IPs and DNS names
+default : @end
+	ALLOW_ADMINISTRATOR=$(CONDOR_HOST)
+	ALLOW_OWNER=$(FULL_HOSTNAME) $(IP_ADDRESS)
+	ALLOW_READ=*
+	ALLOW_WRITE=$(FULL_HOSTNAME) $(IP_ADDRESS)
+	ALLOW_NEGOTIATOR=$(CONDOR_HOST)
+	ALLOW_NEGOTIATOR_SCHEDD=$(ALLOW_NEGOTIATOR) $(FLOCK_NEGOTIATOR_HOSTS)
+	ALLOW_WRITE_COLLECTOR=$(ALLOW_WRITE) $(FLOCK_FROM)
+	ALLOW_WRITE_STARTD=$(ALLOW_WRITE) $(FLOCK_FROM)
+	ALLOW_READ_COLLECTOR=$(ALLOW_READ) $(FLOCK_FROM)
+	ALLOW_READ_STARTD=$(ALLOW_READ) $(FLOCK_FROM)
+@end
+review=?
+
+[$SECURITY.WITH_AUTHENTICATION]
+friendly_name=Enable
+default : @end
+	SEC_DEFAULT_AUTHENTICATION=required
+	SEC_DEFAULT_INTEGRITY=required
+@end
+review=?
+
+[$SECURITY.STRONG]
+friendly_name=Enable
+default : @end
+	SEC_DEFAULT_ENCRYPTION=required
+	SEC_DEFAULT_INTEGRITY=required
+	SEC_DEFAULT_AUTHENTICATION=required
+@end
+review=?
+
+[$SECURITY.USER_BASED]
+friendly_name=Enable
+default : @end
+	if $(CondorIsAdmin)
+	  authuser=condor
+	else
+	  authuser=$(USERNAME)
+	endif
+	ALLOW_ADMINISTRATOR=$(authuser)@$(CONDOR_HOST)
+	ALLOW_OWNER=$(authuser)@$(FULL_HOSTNAME) $(authuser)@$(IP_ADDRESS)
+	ALLOW_READ=*
+	ALLOW_WRITE=$(authuser)@$(FULL_HOSTNAME) $(authuser)@$(IP_ADDRESS)
+	ALLOW_NEGOTIATOR=$(authuser)@$(CONDOR_HOST)
+	ALLOW_NEGOTIATOR_SCHEDD=$(ALLOW_NEGOTIATOR) $(FLOCK_NEGOTIATOR_HOSTS)
+	ALLOW_WRITE_COLLECTOR=$(ALLOW_WRITE) $(FLOCK_FROM)
+	ALLOW_WRITE_STARTD=$(ALLOW_WRITE) $(FLOCK_FROM)
+	ALLOW_READ_COLLECTOR=$(ALLOW_READ) $(FLOCK_FROM)
+	ALLOW_READ_STARTD=$(ALLOW_READ) $(FLOCK_FROM)
+	use SECURITY : WITH_AUTHENTICATION
+@end
+review=?
+
+[$FEATURE.REMOTE_RUNTIME_CONFIG]
+friendly_name=Enable runtime configuration of HTCondor daemons
+default : @end
+	ENABLE_RUNTIME_CONFIG=True
+	ALLOW_CONFIG=$(ALLOW_ADMINISTRATOR)
+	# the value of this attribute defines which parameters can be set remotely
+	#SETTABLE_ATTRS_CONFIG=*
+@end
+review=?
+
+[$FEATURE.REMOTE_CONFIG]
+friendly_name=Enable runtime and persistent configuration of HTCondor daemons
+default : @end
+	ENABLE_PERSISTENT_CONFIG=True
+	PERSISTENT_CONFIG_DIR=$(SPOOL)
+	use FEATURE : REMOTE_RUNTIME_CONFIG
+@end
+review=?
+
+# note vm_vmware script is perl so it doesn't get a .exe extension on Windows.
+[$FEATURE.VMWARE]
+friendly_name=Settings for to use VMWARE with VM Universe
+default : @end
+	VM_TYPE=vmware
+	VM_MEMORY=$(DETECTED_MEMORY)/($(NUM_CPUS)+1)
+	VM_MAX_NUMBER=$(NUM_CPUS)
+	VM_NETWORKING_TYPE=nat
+	VM_NETWORKING_DEFAULT_TYPE=nat
+	VMWARE_PERL=perl
+	VMWARE_SCRIPT=$(SBIN)/condor_vm_vmware
+	VMWARE_NAT_NETWORKING_TYPE=nat
+	VMWARE_BRIDGE_NETWORKING_TYPE=bridged
+	VMWARE_NETWORKING_TYPE=nat
+	#VMWARE_LOCAL_SETTINGS_FILE=$(RELEASE_DIR)/condor_vmware_local_settings
+@end
+review=?
+
+[$FEATURE.GPUs]
+friendly_name=Settings for to detect and use GPUs as custom resources
+default : @end
+	MACHINE_RESOURCE_INVENTORY_GPUs=$(LIBEXEC)/condor_gpu_discovery -properties $(GPU_DISCOVERY_EXTRA)
+	ENVIRONMENT_FOR_AssignedGPUs=GPU_DEVICE_ORDINAL=/(CUDA|OCL)//  CUDA_VISIBLE_DEVICES
+	ENVIRONMENT_VALUE_FOR_UnAssignedGPUs=10000
+@end
+review=?
+
+[$FEATURE.PartitionableSlot]
+friendly_name=Configure a partitionable slot, args: [type# [, allocation]]
+default : @end
+	if $(1?)
+	  NUM_SLOTS_TYPE_$(1)=1
+	  SLOT_TYPE_$(1)_PARTITIONABLE=true
+	  if $(2?)
+	     SLOT_TYPE_$(1)=$(2+)
+	  else
+	     SLOT_TYPE_$(1)=100%
+	  endif
+	else
+	  NUM_SLOTS_TYPE_1=1
+	  SLOT_TYPE_1_PARTITIONABLE=true
+	  SLOT_TYPE_1=100%
+	endif
+@end
+review=?
+
+[$FEATURE.OneShotCronHook]
+friendly_name=Configure a OneShot Cron Hook, args: STARTD_CRON | SCHEDD_CRON, tag, exe [, hook_args]
+default : @end
+   $(1)_JOBLIST=$($(1)_JOBLIST) $(2)
+   $(1)_$(2)_MODE=OneShot
+   $(1)_$(2)_KILL=true
+   $(1)_$(2)_RECONFIG_RERUN=true
+   $(1)_$(2)_EXECUTABLE=$(3)
+   if $(4?)
+     $(1)_$(2)_ARGS=$(4)
+   endif
+@end
+
+[$FEATURE.PeriodicCronHook]
+friendly_name=Configure a Periodic Cron Hook, args: STARTD_CRON | SCHEDD_CRON , tag, period, exe [,hook_args]
+default : @end
+   $(1)_JOBLIST=$($(1)_JOBLIST) $(2)
+   $(1)_$(2)_MODE=Periodic
+   $(1)_$(2)_PERIOD=$(3)
+   $(1)_$(2)_EXECUTABLE=$(4)
+   if $(5?)
+     $(1)_$(2)_ARGS=$(5)
+   endif
+@end
+
+[$FEATURE.ContinuousCronHook]
+friendly_name=Configure a Continuous Cron Hook, args: STARTD_CRON | SCHEDD_CRON , tag, exe [,hook_args]
+default : @end
+   $(1)_JOBLIST=$($(1)_JOBLIST) $(2)
+   $(1)_$(2)_MODE=WaitForExit
+   $(1)_$(2)_PERIOD=0
+   $(1)_$(2)_EXECUTABLE=$(3)
+   if $(4?)
+     $(1)_$(2)_ARGS=$(4)
+   endif
+@end
+
+[$FEATURE.StartdCronPeriodic]
+friendly_name=Configure a STARTD Cron periodic Hook, args: tag, period, exe [, hook_args]
+default = use FEATURE : PeriodicCronHook(STARTD_CRON, $(0))
+[$FEATURE.ScheddCronPeriodic]
+friendly_name=Configure a SCHEDD Cron periodic Hook, args: tag, period, exe [, hook_args]
+default = use FEATURE : PeriodicCronHook(SCHEDD_CRON, $(0))
+
+[$FEATURE.StartdCronOneShot]
+friendly_name=Configure a STARTD Cron periodic Hook, args: tag, exe [, hook_args]
+default = use FEATURE : OneShotCronHook(STARTD_CRON, $(0))
+[$FEATURE.ScheddCronOneShot]
+friendly_name=Configure a SCHEDD Cron periodic Hook, args: tag, exe [, hook_args]
+default = use FEATURE : OneShotCronHook(SCHEDD_CRON, $(0))
+
+[$FEATURE.StartdCronContinuous]
+friendly_name=Configure a STARTD Cron continuous Hook, args: tag, exe [, hook_args]
+default = use FEATURE : ContinuousCronHook(STARTD_CRON, $(0))
+[$FEATURE.ScheddCronContinuous]
+friendly_name=Configure a SCHEDD Cron continuous Hook, args: tag, exe [, hook_args]
+default = use FEATURE : ContinuousCronHook(SCHEDD_CRON, $(0))
+
+##
+## Experimental meta knobs
+##
+
+[$EXPERIMENTAL.CollectorNode]
+friendly_name=One node of a Collector tree, args: id [,port]
+default: @end
+   COLLECTOR$(1)=$(COLLECTOR)
+   if $(2?)
+      COLLECTOR$(1)_ARGS=-f -local-name COLLECTOR$(1) -p $(2)
+   else
+      COLLECTOR$(1)_ARGS=-f -local-name COLLECTOR$(1) -sock collector$(1)
+   endif
+   COLLECTOR$(1).COLLECTOR_LOG=$(LOG)/Collector$(1)Log 
+   DAEMON_LIST=$(DAEMON_LIST) COLLECTOR$(1)
+@end
+
+[$EXPERIMENTAL.HAD]
+friendly_name=Shared port stuff for a HAD node. args: none
+default: @end
+   DAEMON_LIST = $(DAEMON_LIST) HAD REPLICATION
+   HAD_USE_REPLICATION = TRUE
+   MASTER_HAD_BACKOFF_CONSTANT = 360
+@end
+
+[$EXPERIMENTAL.HADSharedPort]
+friendly_name=Shared port stuff for a HAD node. args: controlee, ip/hostname
+default: @end
+   use EXPERIMENTAL : HADReplication( $(1), $(2), $(SHARED_PORT_PORT), $(SHARED_PORT_PORT) )
+@end
+
+[$EXPERIMENTAL.HADFixedPort]
+friendly_name=Shared port stuff for a HAD node. args: controlee, ip/hostname, hadport, replport
+default: @end
+   HAD_ARGS = -p $(3)
+   REPLICATION_ARGS = -p $(4)
+   use EXPERIMENTAL : HADReplication( $(1), $(2), $(3), $(4) )
+@end
+
+[$EXPERIMENTAL.HADReplication]
+friendly_name=Shared port stuff for a HAD node. args: controlee, ip/hostname, hadport, replport
+default: @end
+   HAD_LIST = $(HAD_LIST) $(2):$(3)
+   REPLICATION_LIST = $(REPLICATION_LIST) $(2):$(4)
+   HAD_CONTROLEE = $(1)
+   MASTER_$(1)_CONTROLLER = HAD
+@end
+
+[$EXPERIMENTAL.ASYNC_STAGEOUT]
+friendly_name=Knobs to enable the async stage-out hack for CMS
+default: @end
+	ALLOW_SLOT_PAIRING=true
+	# don't append slot name to StarterLog, may be: Cluster, JobId, false or true. true gives 8.0 compatible behavior.
+	STARTER_LOG_NAME_APPEND=false
+	# create a hidden type2 xfer slot for every type1 slot
+	NUM_SLOTS_TYPE_1 = $(NUM_CPUS)
+	NUM_SLOTS_TYPE_2 = $(NUM_SLOTS_TYPE_1)
+	SLOT_TYPE_2 = minimal cpus=0.1 memory=100 disk=auto
+	SLOT_TYPE_2_NAME_PREFIX = xfer
+	SLOT_TYPE_2_PAIRED_WITH = SLOT_TYPE_1
+	SLOT_TYPE_2_HIDDEN = true
+	SLOT_TYPE_2_START = TARGET.JobTransferringOutput  && splitslotname(TARGET.RemoteHost)[1] == splitslotname(MY.Name)[1]
+	# cross-advertise these slot attributes in all other slots
+	STARTD_SLOT_ATTRS = $(STARTD_SLOT_ATTRS) State Activity EnteredCurrentActivity JobId GlobalJobId
+@end
+
 # obsolete config file knobs to discard on upgrade
 [$UPGRADE.DISCARD]
 friendly_name=Config file knobs that should be ignored on upgrade
@@ -8236,297 +8819,5 @@ win32_default : @end
 	VMWARE_LOCAL_SETTINGS_FILE=$(RELEASE_DIR)/condor_vmware_local_settings
 @end
 
-# use the UWCS desktop preemption policy
-[$POLICY.DESKTOP]
-friendly_name=Use the UWCS preemption policy
-default : @end
-	WANT_SUSPEND=($(SmallJob) || $(KeyboardNotBusy) || $(IsVanilla) ) && ( $(SUSPEND))
-	WANT_VACATE=$(ActivationTimer) > 600 || $(IsVanilla)
-	SUSPEND=($(KeyboardBusy) || ( (CpuBusyTime > 120) && $(ActivationTimer) > 90))
-	CONTINUE=($(CPUIdle) && ($(ActivityTimer) > 10) && (KeyboardIdle > $(ContinueIdleTime)))
-	PREEMPT=(((Activity == "Suspended") && ($(ActivityTimer) > $(MaxSuspendTime))) || (SUSPEND && (WANT_SUSPEND == False)))
-	START=((KeyboardIdle > $(StartIdleTime)) && ( $(CPUIdle) || (State != "Unclaimed" && State != "Owner")) )
-	KILL=False
-	MaxJobRetirementTime=0
-	CLAIM_WORKLIFE=
-	SLOTS_CONNECTED_TO_KEYBOARD=$(NUM_CPUS)
-@end
-review=?
-
-# no-preemption policy, formerly called TESTINGMODE_
-[$POLICY.ALWAYS_RUN_JOBS]
-friendly_name=Use a no-preemption policy
-default : @end
-	WANT_SUSPEND=False
-	WANT_VACATE=True
-	SUSPEND=False
-	CONTINUE=True
-	PREEMPT=False
-	START=True
-	KILL=False
-	PREEMPTION_REQUIREMENTS=False
-	NEGOTIATOR_CONSIDER_PREEMPTION=False
-	MaxJobRetirementTime=0
-	CLAIM_WORKLIFE=1200
-@end
-review=?
-
-[$POLICY.UWCS_DESKTOP]
-friendly_name=Run jobs only when the user is away from their machine
-default : @end
-	WANT_SUSPEND=$(UWCS_WANT_SUSPEND)
-	WANT_VACATE=$(UWCS_WANT_VACATE)
-	SUSPEND=$(UWCS_SUSPEND)
-	CONTINUE=$(UWCS_CONTINUE)
-	PREEMPT=$(UWCS_PREEMPT)
-	START=$(UWCS_START)
-	KILL=$(UWCS_KILL)
-	PERIODIC_CHECKPOINT=$(UWCS_PERIODIC_CHECKPOINT)
-	PREEMPTION_REQUIREMENTS=$(UWCS_PREEMPTION_REQUIREMENTS)
-	PREEMPTION_RANK=$(UWCS_PREEMPTION_RANK)
-	NEGOTIATOR_PRE_JOB_RANK=$(UWCS_NEGOTIATOR_PRE_JOB_RANK)
-	NEGOTIATOR_POST_JOB_RANK=$(UWCS_NEGOTIATOR_POST_JOB_RANK)
-	MaxJobRetirementTime=$(UWCS_MaxJobRetirementTime)
-	CLAIM_WORKLIFE=$(UWCS_CLAIM_WORKLIFE)
-	SLOTS_CONNECTED_TO_KEYBOARD=$(NUM_CPUS)
-@end
-review=?
-
-[$POLICY.LIMIT_JOB_RUNTIMES]
-friendly_name=Limit job runtimes to 24 hours
-default : @end
-	MAX_JOB_RUNTIME=24*3600
-	PREMPT=(Activity == "Busy") && ((time() - EnteredCurrentActivity) > $(MAX_JOB_RUNTIME))
-@end
-review=?
-
-[$POLICY.PREEMPT_IF_CPUS_EXCEEDED]
-friendly_name=Preempt jobs that use more cpu cores than in slot
-default : @end
-  #
-  # Publish the number of CPU cores being used by the job into
-  # to slot ad as attribute "CpusUsage". This value will
-  # be the average number of cores used by the job over the
-  # past minute, sampling every 5 seconds, and rounded to two digits.
-  #
-  CpusUsage = ifthenelse( \
-     TotalLoadAvg > 0.0 && Activity!="Idle", \
-     int(CondorLoadAvg / TotalLoadAvg * \
-        ifthenelse(TotalLoadAvg < $(DETECTED_CORES), TotalLoadAvg, $(DETECTED_CORES)) \
-        * 100) / 100.0, \
-     0)
-  STARTD_ATTRS = $(STARTD_ATTRS) CpusUsage
-  #
-  # If the startd sees the number of CPU cores used by the job exceed the
-  # number of cores in the slot by more than 0.8, preempt the job
-  # immediately ignoring any retirement time.
-  #
-  CPU_EXCEEDED = (CpusUsage > Cpus + 0.8)
-  PREEMPT = ($(PREEMPT:False)) || $(CPU_EXCEEDED)
-  MAXJOBRETIREMENTTIME = ifthenelse($(CPU_EXCEEDED),0,$(MAXJOBRETIREMENTTIME:0))
-  WANT_SUSPEND = ($(WANT_SUSPEND:False)) && $(CPU_EXCEEDED) =!= TRUE
-@end
-review=?
-
-[$POLICY.HOLD_IF_CPUS_EXCEEDED]
-friendly_name=Hold jobs that use more cpu cores than in slot
-default : @end
-  use policy: preempt_if_cpus_exceeded
-  #
-  # If the startd preempted a job because CPU usage exceeded the number
-  # of cores in the slot, put the job on hold.
-  #
-  WANT_HOLD = ($(WANT_HOLD:False)) || $(CPU_EXCEEDED)
-  WANT_HOLD_REASON = ifThenElse($(CPU_EXCEEDED), \
-     $(HOLD_REASON_CPU_EXCEEDED:"cpu usage exceeded request_cpus"), \
-     $(WANT_HOLD_REASON:UNDEFINED))
-  WANT_HOLD_SUBCODE = ifThenElse($(CPU_EXCEEDED), \
-     $(HOLD_SUBCODE_CPU_EXCEEDED:101), \
-     $(WANT_HOLD_SUBCODE:UNDEFINED))
-@end
-review=?
-
-[$POLICY.PREEMPT_IF_MEMORY_EXCEEDED]
-friendly_name=Preempt jobs that use more memory than in slot
-default : @end
-  #
-  # If the startd sees the memory usage of the job exceed the
-  # memory in the slot, preempt the job immediately ignoring any retirement time.
-  #
-  MEMORY_EXCEEDED = (MemoryUsage =!= UNDEFINED && MemoryUsage > Memory)
-  PREEMPT = ($(PREEMPT:False)) || $(MEMORY_EXCEEDED)
-  MAXJOBRETIREMENTTIME = ifthenelse($(MEMORY_EXCEEDED),0,$(MAXJOBRETIREMENTTIME:0))
-  WANT_SUSPEND = ($(WANT_SUSPEND:False)) && $(MEMORY_EXCEEDED) =!= TRUE
-@end
-review=?
-
-[$POLICY.HOLD_IF_MEMORY_EXCEEDED]
-friendly_name=Hold jobs that use more memory than in slot
-default : @end
-  use policy: preempt_if_memory_exceeded
-  #
-  # If the startd preempted a job because memory usage exceeded the amount
-  # of memory in the slot, put the job on hold.
-  #
-  WANT_HOLD = ($(WANT_HOLD:False)) || $(MEMORY_EXCEEDED)
-  WANT_HOLD_REASON = ifThenElse($(MEMORY_EXCEEDED), \
-     $(HOLD_REASON_MEMORY_EXCEEDED:"memory usage exceeded request_memory"), \
-     $(WANT_HOLD_REASON:UNDEFINED))
-  WANT_HOLD_SUBCODE = ifThenElse($(MEMORY_EXCEEDED), \
-     $(HOLD_SUBCODE_MEMORY_EXCEEDED:102), \
-     $(WANT_HOLD_SUBCODE:UNDEFINED))
-@end
-review=?
-
-[$ROLE.Personal]
-friendly_name=Settings for Personal HTCondor (i.e. the whole pool is on a single machine)
-default : @end
-	CONDOR_HOST=127.0.0.1
-	COLLECTOR_HOST=$(CONDOR_HOST):0
-	DAEMON_LIST=MASTER COLLECTOR NEGOTIATOR STARTD SCHEDD
-	RunBenchmarks=0
-@end
-review=?
-
-[$ROLE.Execute]
-friendly_name=Settings for HTCondor Execute node
-default : @end
-	DAEMON_LIST=$(DAEMON_LIST) STARTD
-@end
-review=?
-
-[$ROLE.Submit]
-friendly_name=Settings for HTCondor Execute node
-default : @end
-	DAEMON_LIST=$(DAEMON_LIST) SCHEDD
-@end
-review=?
-
-[$ROLE.CentralManager]
-friendly_name=Settings for HTCondor Execute node
-default : @end
-	DAEMON_LIST=$(DAEMON_LIST) COLLECTOR NEGOTIATOR
-@end
-review=?
-
-# default security policy
-[$SECURITY.HOST_BASED]
-friendly_name=Default (host based) Authorization policy based on IPs and DNS names
-default : @end
-	ALLOW_ADMINISTRATOR=$(CONDOR_HOST)
-	ALLOW_OWNER=$(FULL_HOSTNAME) $(IP_ADDRESS)
-	ALLOW_READ=*
-	ALLOW_WRITE=$(FULL_HOSTNAME) $(IP_ADDRESS)
-	ALLOW_NEGOTIATOR=$(CONDOR_HOST)
-	ALLOW_NEGOTIATOR_SCHEDD=$(ALLOW_NEGOTIATOR) $(FLOCK_NEGOTIATOR_HOSTS)
-	ALLOW_WRITE_COLLECTOR=$(ALLOW_WRITE) $(FLOCK_FROM)
-	ALLOW_WRITE_STARTD=$(ALLOW_WRITE) $(FLOCK_FROM)
-	ALLOW_READ_COLLECTOR=$(ALLOW_READ) $(FLOCK_FROM)
-	ALLOW_READ_STARTD=$(ALLOW_READ) $(FLOCK_FROM)
-@end
-review=?
-
-[$SECURITY.WITH_AUTHENTICATION]
-friendly_name=Enable
-default : @end
-	SEC_DEFAULT_AUTHENTICATION=required
-	SEC_DEFAULT_INTEGRITY=required
-@end
-review=?
-
-[$SECURITY.STRONG]
-friendly_name=Enable
-default : @end
-	SEC_DEFAULT_ENCRYPTION=required
-	SEC_DEFAULT_INTEGRITY=required
-	SEC_DEFAULT_AUTHENTICATION=required
-@end
-review=?
-
-[$SECURITY.USER_BASED]
-friendly_name=Enable
-default : @end
-	if $(CondorIsAdmin)
-	  authuser=condor
-	else
-	  authuser=$(USERNAME)
-	endif
-	ALLOW_ADMINISTRATOR=$(authuser)@$(CONDOR_HOST)
-	ALLOW_OWNER=$(authuser)@$(FULL_HOSTNAME) $(authuser)@$(IP_ADDRESS)
-	ALLOW_READ=*
-	ALLOW_WRITE=$(authuser)@$(FULL_HOSTNAME) $(authuser)@$(IP_ADDRESS)
-	ALLOW_NEGOTIATOR=$(authuser)@$(CONDOR_HOST)
-	ALLOW_NEGOTIATOR_SCHEDD=$(ALLOW_NEGOTIATOR) $(FLOCK_NEGOTIATOR_HOSTS)
-	ALLOW_WRITE_COLLECTOR=$(ALLOW_WRITE) $(FLOCK_FROM)
-	ALLOW_WRITE_STARTD=$(ALLOW_WRITE) $(FLOCK_FROM)
-	ALLOW_READ_COLLECTOR=$(ALLOW_READ) $(FLOCK_FROM)
-	ALLOW_READ_STARTD=$(ALLOW_READ) $(FLOCK_FROM)
-	use SECURITY : WITH_AUTHENTICATION
-@end
-review=?
-
-[$FEATURE.REMOTE_RUNTIME_CONFIG]
-friendly_name=Enable runtime configuration of HTCondor daemons
-default : @end
-	ENABLE_RUNTIME_CONFIG=True
-	ALLOW_CONFIG=$(ALLOW_ADMINISTRATOR)
-	# the value of this attribute defines which parameters can be set remotely
-	#SETTABLE_ATTRS_CONFIG=*
-@end
-review=?
-
-[$FEATURE.REMOTE_CONFIG]
-friendly_name=Enable runtime and persistent configuration of HTCondor daemons
-default : @end
-	ENABLE_PERSISTENT_CONFIG=True
-	PERSISTENT_CONFIG_DIR=$(SPOOL)
-	use FEATURE : REMOTE_RUNTIME_CONFIG
-@end
-review=?
-
-# note vm_vmware script is perl so it doesn't get a .exe extension on Windows.
-[$FEATURE.VMWARE]
-friendly_name=Settings for to use VMWARE with VM Universe
-default : @end
-	VM_TYPE=vmware
-	VM_MEMORY=$(DETECTED_MEMORY)/($(NUM_CPUS)+1)
-	VM_MAX_NUMBER=$(NUM_CPUS)
-	VM_NETWORKING_TYPE=nat
-	VM_NETWORKING_DEFAULT_TYPE=nat
-	VMWARE_PERL=perl
-	VMWARE_SCRIPT=$(SBIN)/condor_vm_vmware
-	VMWARE_NAT_NETWORKING_TYPE=nat
-	VMWARE_BRIDGE_NETWORKING_TYPE=bridged
-	VMWARE_NETWORKING_TYPE=nat
-	#VMWARE_LOCAL_SETTINGS_FILE=$(RELEASE_DIR)/condor_vmware_local_settings
-@end
-review=?
-
-[$FEATURE.GPUs]
-friendly_name=Settings for to detect and use GPUs as custom resources
-default : @end
-	MACHINE_RESOURCE_INVENTORY_GPUs=$(LIBEXEC)/condor_gpu_discovery -properties $(GPU_DISCOVERY_EXTRA)
-	ENVIRONMENT_FOR_AssignedGPUs=GPU_DEVICE_ORDINAL=/(CUDA|OCL)//  CUDA_VISIBLE_DEVICES
-	ENVIRONMENT_VALUE_FOR_UnAssignedGPUs=10000
-@end
-review=?
-
-[$EXPERIMENTAL.ASYNC_STAGEOUT]
-friendly_name=Knobs to enable the async stage-out hack for CMS
-default: @end
-	ALLOW_SLOT_PAIRING=true
-	# don't append slot name to StarterLog, may be: Cluster, JobId, false or true. true gives 8.0 compatible behavior.
-	STARTER_LOG_NAME_APPEND=false
-	# create a hidden type2 xfer slot for every type1 slot
-	NUM_SLOTS_TYPE_1 = $(NUM_CPUS)
-	NUM_SLOTS_TYPE_2 = $(NUM_SLOTS_TYPE_1)
-	SLOT_TYPE_2 = minimal cpus=0.1 memory=100 disk=auto
-	SLOT_TYPE_2_NAME_PREFIX = xfer
-	SLOT_TYPE_2_PAIRED_WITH = SLOT_TYPE_1
-	SLOT_TYPE_2_HIDDEN = true
-	SLOT_TYPE_2_START = TARGET.JobTransferringOutput  && splitslotname(TARGET.RemoteHost)[1] == splitslotname(MY.Name)[1]
-	# cross-advertise these slot attributes in all other slots
-	STARTD_SLOT_ATTRS = $(STARTD_SLOT_ATTRS) State Activity EnteredCurrentActivity JobId GlobalJobId
-@end
 
 # ^^^^ TJ SEZ: do NOT insert new param knobs here. insert meta knobs just above this banner, and regular knobs near to related knobs way up there ^^^^

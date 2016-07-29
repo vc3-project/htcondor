@@ -32,7 +32,8 @@ class DockerAPI {
 		 * @param error			On success, unchanged.  Otherwise, [TODO].
 		 * @return 				0 on success, negative otherwise.
 		 */
-		static int run(			const ClassAd &machineAd,
+		static int run(			ClassAd &machineAd,
+						ClassAd &jobAd,
 						const std::string & name,
 						const std::string & imageID,
 						const std::string & command,
@@ -89,7 +90,7 @@ class DockerAPI {
 		// Only available in Docker 1.1 or later.
 		static int unpause( const std::string & container, CondorError & err );
 
-		static int stats(const std::string &container, uint64_t &memUsage, uint64_t &netIn, uint64_t &netOut);
+		static int stats(const std::string &container, uint64_t &memUsage, uint64_t &netIn, uint64_t &netOut, uint64_t &userCpu, uint64_t &sysCpu);
 
 		/**
 		 * Obtains the docker-inspect values State.Running and State.ExitCode.
@@ -118,6 +119,8 @@ class DockerAPI {
 		 * @return				0 on success, negative otherwise.
 		 */
 		static int version( std::string & version, CondorError & err );
+		static int majorVersion;
+		static int minorVersion;
 
 		/**
 		 * Returns a ClassAd corresponding to a subset of the output of

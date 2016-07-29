@@ -138,7 +138,7 @@ class ClassAd : public ExprTree
 			@param value The integer value of the attribute.
 			@param f The multiplicative factor to be attached to value.
 			@see Value::NumberFactor
-e		*/
+		*/
 		bool InsertAttr( const std::string &attrName,int value, 
 				Value::NumberFactor f=Value::NO_FACTOR );
 		bool InsertAttr( const std::string &attrName,long value, 
@@ -262,6 +262,15 @@ e		*/
 				otherwise.
 		*/
 		ExprTree *Lookup( const std::string &attrName ) const;
+
+		/** Finds the expression bound to an attribute name, ignoring chained parent.
+		        Behaves just like Lookup(), except any parent ad chained to this
+				ad is ignored.
+			@param attrName The name of the attribute.
+			@return The expression bound to the name in the ClassAd, or NULL
+				otherwise.
+		*/
+		ExprTree *LookupIgnoreChain( const std::string &attrName ) const;
 
 		/** Finds the expression bound to an attribute name.  The lookup uses
 				the scoping structure (including <tt>super</tt> attributes) to 
@@ -535,6 +544,7 @@ e		*/
         int size(void) const { return attrList.size(); }
 		//@}
 
+		void rehash(size_t s) { attrList.rehash(s);}
 		/** Deconstructor to get the components of a classad
 		 * 	@param vec A vector of (name,expression) pairs which are the
 		 * 		attributes of the classad

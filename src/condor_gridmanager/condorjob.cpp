@@ -27,7 +27,6 @@
 #include "spooled_job_files.h"
 #include "daemon.h"
 #include "dc_schedd.h"
-#include "job_lease.h"
 #include "nullfile.h"
 
 #include "gridmanager.h"
@@ -561,8 +560,8 @@ void CondorJob::doEvaluateState()
 				}
 				char *job_id_string = NULL;
 				if ( gahpAd == NULL ) {
-					int new_expiration;
-					if ( CalculateJobLease( jobAd, new_expiration ) ) {
+					int new_expiration = myResource->GetLeaseExpiration( this );
+					if ( new_expiration > 0 ) {
 							// This will set the job lease sent attrs,
 							// which get referenced in buildSubmitAd()
 						UpdateJobLeaseSent( new_expiration );
@@ -1302,6 +1301,10 @@ void CondorJob::ProcessRemoteAd( ClassAd *remote_ad )
 		ATTR_JOB_CORE_DUMPED,
 		ATTR_EXECUTABLE_SIZE,
 		ATTR_IMAGE_SIZE,
+		ATTR_MEMORY_USAGE,
+		ATTR_RESIDENT_SET_SIZE,
+		ATTR_PROPORTIONAL_SET_SIZE,
+		ATTR_DISK_USAGE,
 		ATTR_SPOOLED_OUTPUT_FILES,
 		NULL };		// list must end with a NULL
 
@@ -1453,7 +1456,6 @@ ClassAd *CondorJob::buildSubmitAd()
 	submit_ad->Delete( ATTR_JOB_STATUS_ON_RELEASE );
 	submit_ad->Delete( ATTR_LAST_JOB_LEASE_RENEWAL );
 	submit_ad->Delete( ATTR_JOB_LEASE_DURATION );
-	submit_ad->Delete( ATTR_LAST_JOB_LEASE_RENEWAL_FAILED );
 	submit_ad->Delete( ATTR_TIMER_REMOVE_CHECK );
 	submit_ad->Delete( ATTR_JOB_LEASE_EXPIRATION );
 	submit_ad->Delete( ATTR_AUTO_CLUSTER_ID );

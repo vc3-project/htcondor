@@ -460,8 +460,10 @@ int MyRowOfValues::SetMaxCols(int max_cols)
 	if (max_cols > cmax) {
 		classad::Value * pd = new classad::Value[max_cols];
 		unsigned char * pv = new unsigned char[max_cols];
+		memset(pv, '\0', max_cols);
+
 		if (pdata) {
-			for (int ii = 0; ii < cmax; ++ii) { pd[ii] = pdata[ii]; pvalid[ii] = pv[ii]; }
+			for (int ii = 0; ii < cmax; ++ii) { pd[ii] = pdata[ii]; pv[ii] = pvalid[ii]; }
 			delete [] pdata;
 			delete [] pvalid;
 		}
@@ -1357,6 +1359,18 @@ render (MyRowOfValues & rov, AttrList *al, AttrList *target /* = NULL */)
 				col_is_valid = true;
 			} else {
 				col_is_valid = EvalExprTree(tree, al, target, *pval);
+				if (col_is_valid) {
+					// since we want to hold on to these Values after we throw away the input
+					// Classad al. We have to deep copy any Values of type list here.
+					// note that this problem will also occurr with values of type classad
+					// but we don't currently have a shared_ptr flavor of nested classads
+					// so we can't actually fix that here right now.
+					classad::ExprList * plist = NULL;
+					if (pval->IsListValue(plist) && plist) {
+						classad_shared_ptr<classad::ExprList> lst( (classad::ExprList*)plist->Copy() );
+						pval->SetListValue(lst);
+					}
+				}
 			}
 
 			// if we made the tree, then unmake it now.
@@ -2168,6 +2182,7 @@ int parse_autoformat_args (
 	bool fCapV  = false;
 	bool fRaw = false;
 	bool fheadings = false;
+	bool fJobId = false;
 	const char * prowpre = NULL;
 	const char * pcolpre = " ";
 	const char * pcolsux = NULL;
@@ -2183,11 +2198,24 @@ int parse_autoformat_args (
 				case 'V': fCapV = true; break;
 				case 'r': case 'o': fRaw = true; break;
 				case 'h': fheadings = true; break;
+				case 'j': fJobId = true; break;
 			}
 			++popts;
 		}
 	}
 	print_mask.SetAutoSep(prowpre, pcolpre, pcolsux, "\n");
+
+	if (fJobId) {
+		if (fheadings || print_mask.has_headings()) {
+			print_mask.set_heading(" ID");
+			print_mask.registerFormat (flabel ? "ID = %4d." : "%4d.", 5, FormatOptionAutoWidth | FormatOptionNoSuffix, ATTR_CLUSTER_ID);
+			print_mask.set_heading(" ");
+			print_mask.registerFormat ("%-3d", 3, FormatOptionAutoWidth | FormatOptionNoPrefix, ATTR_PROC_ID);
+		} else {
+			print_mask.registerFormat (flabel ? "ID = %d." : "%d.", 0, FormatOptionNoSuffix, ATTR_CLUSTER_ID);
+			print_mask.registerFormat ("%d", 0, FormatOptionNoPrefix, ATTR_PROC_ID);
+		}
+	}
 
 	while (argv[ixArg] && *(argv[ixArg]) != '-') {
 

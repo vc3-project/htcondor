@@ -21,6 +21,12 @@
 project(CONDOR)
 cmake_minimum_required(VERSION 2.6)
 
+# Turn off deprecations warnings for cmake 3.x
+# Need to wait to fix these after we drop older cmake versions
+if(POLICY CMP0054)
+	cmake_policy(SET CMP0054 OLD)
+endif()
+
 ##########################################################################
 #Setup package meta-data (used in packaging)
 set(PACKAGE "condor")
@@ -29,7 +35,7 @@ set(PACKAGE "condor")
 #   Condor and other systems parse this number. Keep it simple:
 #   Number.Number.Number. Do nothing else.  If you need to add
 #   more information, PRE_RELEASE is usually the right location.
-set(VERSION "8.5.4")
+set(VERSION "8.5.7")
 
 # Set PRE_RELEASE to either a string (i.e. "PRE-RELEASE-UWCS") or OFF
 #   This shuld be "PRE-RELEASE-UWCS most of the time, and OFF when

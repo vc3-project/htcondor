@@ -462,7 +462,7 @@ bool condor_sockaddr::from_ip_string(const char* ip_string)
 		const char * closeBracket = strchr( ip_string, ']' );
 		if( closeBracket != NULL ) {
 			int addrLength = closeBracket - ip_string - 1;
-			if( addrLength < (8 * 4) + 7 ) {
+			if( addrLength <= (8 * 4) + 7 ) {
 				memcpy( unbracketedString, & ip_string[1], addrLength );
 				unbracketedString[ addrLength ] = '\0';
 				ip_string = unbracketedString;
@@ -539,7 +539,7 @@ MyString condor_sockaddr::to_ip_string(bool decorate) const
 	return ret;
 }
 
-MyString condor_sockaddr::to_ip_and_port_string() {
+MyString condor_sockaddr::to_ip_and_port_string() const {
 	// Using formatstr() would be better in every possible way, but it
 	// doesn't exist in libcondorsyscall.
 	std::ostringstream oss;

@@ -27,6 +27,7 @@
 #include <string>
 
 class MyString;
+class MyStringSource;
 #include "stl_string_utils.h"
 
 /** The MyString class is a C++ representation of a string. It was
@@ -95,6 +96,7 @@ class MyString
 	int length() const { return Len; }
 	int size() const { return Len; }
 	void clear() { assign_str(NULL, 0); }
+	void set(const char* p, int len) { assign_str(p, len); }
 	bool empty() const { return (0 == Len); }
 	const char * c_str() const { return Value(); }
 
@@ -359,7 +361,7 @@ class MyString
 	//           I/O
 	// ----------------------------------------
   
-	/** Safely read from the given file until we've hit a newline or
+	/** Safely  from the given file until we've hit a newline or
 		an EOF.  We use fgets() in a loop to make sure we've read data
 		until we find a newline.  If the buffer wasn't big enough and
 		there's more to read, we fgets() again and append the results
@@ -372,6 +374,7 @@ class MyString
 		@returns True if we found data, false if we're at the EOF 
 	 */
 	bool readLine( FILE* fp, bool append = false);
+	bool readLine( MyStringSource & src, bool append = false);
 
 	// ----------------------------------------
 	//           Tokenize (safe replacement for strtok())
@@ -393,6 +396,8 @@ class MyString
 	//@}
 
 private:
+	friend class MyStringSource;
+	friend class MyStringCharSource;
 
 	/** Returns string. Note that it may return NULL */
 	const char *GetCStr() const { return Data;               }
@@ -422,16 +427,38 @@ unsigned int MyStringHash( const MyString &str );
 class YourSensitiveString {
 public:
 	YourSensitiveString() : m_str(0) {}
-	YourSensitiveString(char const *str) {
-		m_str = str;
-	}
-	bool operator ==(const YourSensitiveString &rhs) {
+	YourSensitiveString(const char *str) : m_str(str) {}
+	YourSensitiveString(const YourSensitiveString &rhs) : m_str(rhs.m_str) {}
+
+	void operator =(const char *str) { m_str = str; }
+	const char * Value() const { return m_str ? m_str : ""; }
+	const char * ptr() const { return m_str; }
+
+	bool operator ==(const YourSensitiveString &rhs) const {
 		if (m_str == rhs.m_str) return true;
 		if ((!m_str) || (!rhs.m_str)) return false;
 		return strcmp(m_str,rhs.m_str) == 0;
 	}
-	void operator =(char const *str) {
-		m_str = str;
+	bool operator ==(const char * str) const {
+		if (m_str == str) return true;
+		if ((!m_str) || (!str)) return false;
+		return strcmp(m_str,str) == 0;
+	}
+	bool operator<(const char * str) const {
+		if ( ! m_str) {
+			 return str ? -1 : 0;
+		} else if ( ! str) {
+			return 1;
+		}
+		return strcmp(m_str, str);
+	}
+	bool operator<(const YourSensitiveString &rhs) const {
+		if ( ! m_str) {
+			 return rhs.m_str ? -1 : 0;
+		} else if ( ! rhs.m_str) {
+			return 1;
+		}
+		return strcmp(m_str, rhs.m_str);
 	}
 	static unsigned int hashFunction(const YourSensitiveString &s) {
 		// hash function for strings
@@ -448,10 +475,54 @@ public:
 		return hash;
 	}
 
-
-private:
-	char const *m_str;
+protected:
+	const char *m_str;
 };
 
+// this lets a make a case-insensitive std::map of YourSensitiveStrings
+struct CaseIgnLTYourSensitiveString {
+	inline bool operator( )( const YourSensitiveString &s1, const YourSensitiveString &s2 ) const {
+		const char * p1 = s1.ptr();
+		const char * p2 = s2.ptr();
+		if (p1 == p2) return 0; // p1 or p2 might be null
+		if ( ! p1) { return true; } if ( ! p2) { return false; }
+		return strcasecmp(p1, p2) < 0;
+	}
+};
+
+// these let us use MyString::readLine from file or string sources
+//
+class MyStringSource {
+public:
+	virtual ~MyStringSource() {};
+	virtual bool readLine(MyString & str, bool append = false) = 0;
+	virtual bool isEof()=0;
+};
+
+class MyStringFpSource : public MyStringSource {
+public:
+	MyStringFpSource(FILE*_fp=NULL, bool delete_fp=false) : fp(_fp), owns_fp(delete_fp) {}
+	virtual ~MyStringFpSource() { if (fp && owns_fp) fclose(fp); fp = NULL; };
+	virtual bool readLine(MyString & str, bool append = false);
+	virtual bool isEof();
+protected:
+	FILE* fp;
+	bool  owns_fp;
+};
+
+class MyStringCharSource : public MyStringSource {
+public:
+	MyStringCharSource(char* src=NULL, bool delete_src=true) : ptr(src), ix(0), owns_ptr(delete_src) {}
+	virtual ~MyStringCharSource() { if (ptr && owns_ptr) free(ptr); ptr = NULL; };
+
+	char* Attach(char* src) { char* pOld = ptr; ptr = src; return pOld; }
+	char* Detach() { return Attach(NULL); }
+	virtual bool readLine(MyString & str, bool append = false);
+	virtual bool isEof();
+protected:
+	char * ptr;
+	int    ix;
+	bool   owns_ptr;
+};
 
 #endif

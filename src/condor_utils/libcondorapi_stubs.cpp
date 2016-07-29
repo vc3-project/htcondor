@@ -154,6 +154,10 @@ int param_integer_c(const char *, int default_value, int /*min_val*/, int /*max_
 	return default_value;
 }
 
+// stubs for classad_usermap.cpp functions needed by compat_classad
+int reconfig_user_maps() { return 0; }
+bool user_map_do_mapping(const char *, const char *, MyString & output) { output.clear(); return false; }
+
 #ifdef HAVE_EXT_PCRE
 
 #ifdef HAVE_PCRE_PCRE_H

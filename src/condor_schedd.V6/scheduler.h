@@ -63,9 +63,6 @@
 
 extern  int         STARTD_CONTACT_TIMEOUT;
 const	int			NEGOTIATOR_CONTACT_TIMEOUT = 30;
-const	int			SCHEDD_INTERVAL_DEFAULT = 300;
-const	int			JOB_DEFERRAL_PREP_TIME_DEFAULT = 300; // seconds
-const	int			JOB_DEFERRAL_WINDOW_DEFAULT = 0; // seconds
 
 #define DEFAULT_MAX_JOB_QUEUE_LOG_ROTATIONS 1
 
@@ -166,8 +163,11 @@ struct OwnerData {
   int FlockLevel;
   int OldFlockLevel;
   time_t NegotiationTimestamp;
+  time_t lastUpdateTime; // the last time we sent updates to the collector
+  bool absentUpdateSent;
   std::set<int> PrioSet; // Set of job priorities, used for JobPrioArray attr
-  OwnerData() : LastHitTime(0), FlockLevel(0), OldFlockLevel(0), NegotiationTimestamp(0) { }
+  OwnerData() : LastHitTime(0), FlockLevel(0), OldFlockLevel(0), NegotiationTimestamp(0)
+      , lastUpdateTime(0), absentUpdateSent(false)  { }
 };
 
 typedef std::map<std::string, OwnerData> OwnerDataMap;
@@ -314,12 +314,12 @@ private:
 class HistoryHelperState
 {
 public:
-	HistoryHelperState(Stream &stream, const std::string &reqs, const std::string &proj, const std::string &match)
-	 : m_stream_ptr(&stream), m_reqs(reqs), m_proj(proj), m_match(match)
+	HistoryHelperState(Stream &stream, const std::string &reqs, const std::string &since, const std::string &proj, const std::string &match)
+	 : m_streamresults(false), m_stream_ptr(&stream), m_reqs(reqs), m_since(since), m_proj(proj), m_match(match)
 	{}
 
-	HistoryHelperState(classad_shared_ptr<Stream> stream, const std::string &reqs, const std::string &proj, const std::string &match)
-	 : m_stream_ptr(NULL), m_reqs(reqs), m_proj(proj), m_match(match), m_stream(stream)
+	HistoryHelperState(classad_shared_ptr<Stream> stream, const std::string &reqs, const std::string &since, const std::string &proj, const std::string &match)
+	 : m_streamresults(false), m_stream_ptr(NULL), m_reqs(reqs), m_since(since), m_proj(proj), m_match(match), m_stream(stream)
 	{}
 
 	~HistoryHelperState() { if (m_stream.get() && m_stream.unique()) daemonCore->Cancel_Socket(m_stream.get()); }
@@ -327,12 +327,15 @@ public:
 	Stream * GetStream() const { return m_stream_ptr ? m_stream_ptr : m_stream.get(); }
 
 	const std::string & Requirements() const { return m_reqs; }
-        const std::string & Projection() const { return m_proj; }
-        const std::string & MatchCount() const { return m_match; }
+	const std::string & Since() const { return m_since; }
+	const std::string & Projection() const { return m_proj; }
+	const std::string & MatchCount() const { return m_match; }
+	bool m_streamresults;
 
 private:
 	Stream *m_stream_ptr;
 	std::string m_reqs;
+	std::string m_since;
 	std::string m_proj;
 	std::string m_match;
 	classad_shared_ptr<Stream> m_stream;
@@ -642,6 +645,7 @@ private:
 	int				MaxJobsRunning;
 	char*			StartLocalUniverse; // expression for local jobs
 	char*			StartSchedulerUniverse; // expression for scheduler jobs
+	int				MaxRunningSchedulerJobsPerOwner;
 	int				MaxJobsSubmitted;
 	int				MaxJobsPerOwner;
 	int				MaxJobsPerSubmission;
@@ -753,6 +757,7 @@ private:
 	void   			check_claim_request_timeouts( void );
 	OwnerData * insert_owner(const char*);
 	OwnerData * find_owner(const char*);
+	OwnerData * get_ownerdata(JobQueueJob * job);
 	void		remove_unused_owners();
 	void			child_exit(int, int);
 	void			scheduler_univ_job_exit(int pid, int status, shadow_rec * srec);
@@ -766,7 +771,7 @@ private:
 	void			initLocalStarterDir( void );
 	void	noShadowForJob( shadow_rec* srec, NoShadowFailure_t why );
 	bool			jobExitCode( PROC_ID job_id, int exit_code );
-	int			calcSlotWeight(ClassAd *machine);
+	int			calcSlotWeight(match_rec *mrec);
 	
 	// -----------------------------------------------
 	// CronTab Jobs

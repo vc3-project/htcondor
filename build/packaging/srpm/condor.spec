@@ -10,7 +10,6 @@
 %if 0%{?fedora} >= 16
 # NOTE: HTCondor+gsoap doesn't work yet on F15; ticket not yet upstream AFAIK.  BB
 %define gsoap 0
-%define deltacloud 1
 %define aviary 1
 %ifarch %{ix86} x86_64
 # mongodb supports only x86/x86_64
@@ -22,7 +21,6 @@
 %define cgroups 1
 %else
 %define gsoap 1
-%define deltacloud 0
 %define aviary 0
 %define plumage 0
 %define systemd 0
@@ -174,8 +172,6 @@ Source1: generate-tarball.sh
 %endif
 
 # % if %systemd
-Source2: %{name}-tmpfiles.conf
-Source3: %{name}.service
 # % else
 Source4: condor.osg-sysconfig
 # % endif
@@ -209,7 +205,6 @@ Source111: gsoap-2.7.10.tar.gz
 Source112: gsoap_2.7.16.zip
 Source113: gt5.2.5-all-source-installer.tar.gz
 Source114: libcgroup-0.37.tar.bz2
-Source115: libdeltacloud-0.9.tar.gz
 Source116: log4cpp-1.0-3.tar.gz
 Source117: unicoregahp-1.2.0.tar.gz
 Source118: voms-2.0.6.tar.gz
@@ -314,10 +309,6 @@ BuildRequires: libtool-ltdl-devel
 BuildRequires: gsoap-devel >= 2.7.12-1
 %endif
 
-%if %deltacloud
-BuildRequires: libdeltacloud-devel >= 0.9-1
-%endif
-
 %if %aviary
 BuildRequires: wso2-wsf-cpp-devel >= 2.1.0-4
 BuildRequires: wso2-axis2-devel >= 2.1.0-4
@@ -356,6 +347,7 @@ BuildRequires: qpid-qmf-devel
 %endif
 
 %if %systemd
+BuildRequires: systemd-devel
 BuildRequires: systemd-units
 %endif
 
@@ -520,18 +512,6 @@ Requires: %name-classads = %{version}-%{release}
 The condor_vm-gahp enables the Virtual Machine Universe feature of
 HTCondor. The VM Universe uses libvirt to start and control VMs under
 HTCondor's Startd.
-
-#######################
-%if %deltacloud
-%package deltacloud-gahp
-Summary: HTCondor's Deltacloud Gahp
-Group: Applications/System
-Requires: %name = %version-%release
-
-%description deltacloud-gahp
-The deltacloud_gahp enables HTCondor's ability to manage jobs run on
-resources exposed by the deltacloud API.
-%endif
 
 #######################
 %package classads
@@ -864,11 +844,6 @@ cmake \
 %else
        -DWANT_GLEXEC:BOOL=FALSE \
 %endif
-%if %deltacloud
-       -DWITH_LIBDELTACLOUD:BOOL=TRUE \
-%else
-       -DWITH_LIBDELTACLOUD:BOOL=FALSE \
-%endif
        -DWITH_GLOBUS:BOOL=TRUE \
        -DWITH_PYTHON_BINDINGS:BOOL=TRUE \
 %if %cgroups
@@ -1011,10 +986,12 @@ rm -rf %{buildroot}/%{_sysconfdir}/init.d
 %if %systemd
 # install tmpfiles.d/condor.conf
 mkdir -p %{buildroot}%{_sysconfdir}/tmpfiles.d
-install -m 0644 %{SOURCE2} %{buildroot}%{_sysconfdir}/tmpfiles.d/%{name}.conf
+install -m 0644 %{buildroot}/etc/examples/condor-tmpfiles.conf %{buildroot}%{_sysconfdir}/tmpfiles.d/condor.conf
 
 mkdir -p %{buildroot}%{_unitdir}
-cp %{SOURCE3} %{buildroot}%{_unitdir}/condor.service
+install -m 0644 %{buildroot}/etc/examples/condor.service %{buildroot}%{_unitdir}/condor.service
+# Disabled until HTCondor security fixed.
+# install -m 0644 %{buildroot}/etc/examples/condor.socket %{buildroot}%{_unitdir}/condor.socket
 %else
 # install the lsb init script
 install -Dp -m0755 %{buildroot}/etc/examples/condor.init %{buildroot}%{_initrddir}/condor
@@ -1190,6 +1167,8 @@ rm -rf %{buildroot}
 %if %systemd
 %config(noreplace) %_sysconfdir/tmpfiles.d/%{name}.conf
 %{_unitdir}/condor.service
+# Disabled until HTCondor security fixed.
+# %{_unitdir}/condor.socket
 %else
 %_initrddir/condor
 %if 0%{?osg} || 0%{?hcc}
@@ -1247,6 +1226,7 @@ rm -rf %{buildroot}
 %_libexecdir/condor/glite/bin/slurm_cancel.sh
 %_libexecdir/condor/glite/bin/slurm_hold.sh
 %_libexecdir/condor/glite/bin/slurm_resume.sh
+%_libexecdir/condor/glite/bin/slurm_status.py
 %_libexecdir/condor/glite/bin/slurm_status.sh
 %_libexecdir/condor/glite/bin/slurm_submit.sh
 %if ! %uw_build
@@ -1378,6 +1358,7 @@ rm -rf %{buildroot}
 %_bindir/condor_qsub
 %_bindir/condor_pool_job_report
 %_bindir/condor_job_router_info
+%_bindir/condor_transform_ads
 %_bindir/condor_update_machine_ad
 # reconfig_schedd, restart
 # sbin/condor is a link for master_off, off, on, reconfig,
@@ -1589,14 +1570,6 @@ rm -rf %{buildroot}
 %_libexecdir/condor/libvirt_simple_script.awk
 
 #################
-%if %deltacloud
-%files deltacloud-gahp
-%defattr(-,root,root,-)
-%doc LICENSE-2.0.txt NOTICE.txt
-%_sbindir/deltacloud_gahp
-%endif
-
-#################
 %files classads
 %defattr(-,root,root,-)
 %doc LICENSE-2.0.txt NOTICE.txt
@@ -1626,6 +1599,8 @@ rm -rf %{buildroot}
 %_includedir/classad/exprTree.h
 %_includedir/classad/fnCall.h
 %_includedir/classad/indexfile.h
+%_includedir/classad/jsonSink.h
+%_includedir/classad/jsonSource.h
 %_includedir/classad/lexer.h
 %_includedir/classad/lexerSource.h
 %_includedir/classad/literals.h
@@ -1742,7 +1717,6 @@ rm -rf %{buildroot}
 %_libdir/condor/ugahp.jar
 
 %files externals
-%_sbindir/deltacloud_gahp
 %_sbindir/unicore_gahp
 %if %blahp
 %_libexecdir/condor/glite/bin/BLClient
@@ -1778,6 +1752,7 @@ rm -rf %{buildroot}
 %_libexecdir/condor/glite/bin/pbs_cancel.sh
 %_libexecdir/condor/glite/bin/pbs_hold.sh
 %_libexecdir/condor/glite/bin/pbs_resume.sh
+%_libexecdir/condor/glite/bin/pbs_status.py
 %_libexecdir/condor/glite/bin/pbs_status.sh
 %_libexecdir/condor/glite/bin/pbs_submit.sh
 %_libexecdir/condor/glite/bin/runcmd.pl.template
@@ -1910,6 +1885,210 @@ fi
 %endif
 
 %changelog
+* Tue Jul 05 2016 Tim Theisen <tim@cs.wisc.edu> - 8.4.8-1
+- Fixed a memory leak triggered by the python htcondor.Schedd().query() call
+- Fixed a bug that could cause Bosco file transfers to fail
+- Fixed a bug that could cause the schedd to crash when using schedd cron jobs
+- condor_schedd now rejects jobs when owner has no account on the machine
+- Fixed a new bug in 8.4.7 where remote condor_history failed without -limit
+- Fixed bugs triggered by the reconfiguration of the high-availability daemon
+- Fixed a bug where condor_master could hang when using shared port on Windows 
+- Fixed a bug with the -xml option on condor_q and condor_status
+
+* Mon Jun 06 2016 Tim Theisen <tim@cs.wisc.edu> - 8.5.5-1
+- Improvements for scalability of EC2 grid universe jobs
+- Docker Universe jobs advertises remote user and system CPU time
+- Improved systemd support
+- The master can now run an administrator defined script at shutdown
+- DAGMan includes better support for the batch name feature
+
+* Mon Jun 06 2016 Tim Theisen <tim@cs.wisc.edu> - 8.4.7-1
+- fixed a bug that could cause the schedd to become unresponsive
+- fixed a bug where the Docker Universe would not set the group ID
+- Docker Universe jobs now drop all Linux capabilities by default
+- fixed a bug where subsystem specific configuration parameters were ignored
+- fixed bugs with history file processing on the Windows platform
+
+* Thu May 02 2016 Tim Theisen <tim@cs.wisc.edu> - 8.5.4-1
+- Fixed a bug that delays schedd response when significant attributes change
+- Fixed a bug where the group ID was not set in Docker universe jobs
+- Limit update rate of various attributes to not overload the collector
+- To make job router configuration easier, added implicit "target" scoping
+- To make BOSCO work, the blahp does not generate limited proxies by default
+- condor_status can now display utilization per machine rather than per slot
+- Improve performance of condor_history and other tools
+
+* Thu Apr 21 2016 Tim Theisen <tim@cs.wisc.edu> - 8.4.6-1
+- fixed a bug that could cause a job to fail to start in a dynamic slot
+- fixed a negotiator memory leak when using partitionable slot preemption
+- fixed a bug that caused supplemental groups to be wrong during file transfer
+- properly identify the Windows 10 platform
+- fixed a typographic error in the LIMIT_JOB_RUNTIMES policy
+- fixed a bug where maximum length IPv6 addresses were not parsed
+
+* Thu Mar 24 2016 Tim Theisen <tim@cs.wisc.edu> - 8.5.3-1
+- Use IPv6 (and IPv4) interfaces if they are detected
+- Prefer IPv4 addresses when both are available
+- Count Idle and Running jobs in Submitter Ads for Local and Scheduler universes
+- Can submit jobs to SLURM with the new "slurm" type in the Grid universe
+- HTCondor is built and linked with Globus 6.0
+
+* Tue Mar 22 2016 Tim Theisen <tim@cs.wisc.edu> - 8.4.5-1
+- fixed a bug that would cause the condor_schedd to send no flocked jobs
+- fixed a bug that caused a 60 second delay using tools when DNS lookup failed
+- prevent using accounting groups with embedded spaces that crash the negotiator
+- fixed a bug that could cause use of ports outside the port range on Windows
+- fixed a bug that could prevent dynamic slot reuse when using many slots
+- fixed a bug that prevented correct utilization reports from the job router
+- tune kernel when using cgroups to avoid OOM killing of jobs doing heavy I/O
+
+* Thu Feb 18 2016 Tim Theisen <tim@cs.wisc.edu> - 8.5.2-1
+- condor_q now defaults to showing only the current user's jobs
+- condor_q -batch produces a single line report for a batch of jobs
+- Docker Universe jobs now report and update memory and network usage
+- immutable and protected job attributes
+- improved performance when querying a HTCondor daemon's location
+- Added the ability to set ClassAd attributes within the DAG file
+- DAGMan now provides event timestamps in dagman.out
+
+* Tue Feb 02 2016 Tim Theisen <tim@cs.wisc.edu> - 8.4.4-1
+- fixed a bug that could cause the collector to crash when DNS lookup fails
+- fixed a bug that caused Condor-C jobs with short lease durations to fail
+- fixed bugs that affected EC2 grid universe jobs
+- fixed a bug that prevented startup if a prior version shared port file exists
+- fixed a bug that could cause the condor_shadow to hang on Windows
+
+* Fri Jan 08 2016 Tim Theisen <tim@cs.wisc.edu> - 8.5.1-2
+- optimized binaries
+
+* Fri Jan 08 2016 Tim Theisen <tim@cs.wisc.edu> - 8.4.3-2
+- optimized binaries
+
+* Mon Dec 21 2015 Tim Theisen <tim@cs.wisc.edu> - 8.5.1-1
+- the shared port daemon is enabled by default
+- the condor_startd now records the peak memory usage instead of recent
+- the condor_startd advertises CPU submodel and cache size
+- authorizations are automatically setup when "Match Password" is enabled
+- added a schedd-constraint option to condor_q
+
+* Wed Dec 16 2015 Tim Theisen <tim@cs.wisc.edu> - 8.4.3-1
+- fixed the processing of the -append option in the condor_submit command
+- fixed a bug to run more that 100 dynamic slots on a single execute node
+- fixed bugs that would delay daemon startup when using shared port on Windows
+- fixed a bug where the cgroup VM limit would not be set for sizes over 2 GiB
+- fixed a bug to use the ec2_iam_profile_name for Amazon EC2 Spot instances
+
+* Tue Nov 17 2015 Tim Theisen <tim@cs.wisc.edu> - 8.4.2-1
+- a bug fix to prevent the condor_schedd from crashing
+- a bug fix to honor TCP_FORWARDING_HOST
+- Standard Universe works properly in RPM installations of HTCondor
+- the RPM packages no longer claim to provide Globus libraries
+- bug fixes to DAGMan's "maximum idle jobs" throttle
+
+* Tue Oct 27 2015 Tim Theisen <tim@cs.wisc.edu> - 8.4.1-1
+- four new policy metaknobs to make configuration easier
+- a bug fix to prevent condor daemons from crashing on reconfiguration
+- an option natural sorting option on condor_status
+- support of admin to mount certain directories into Docker containers
+
+* Thu Oct 22 2015 Tim Theisen <tim@cs.wisc.edu> - 8.2.10-1
+- an updated RPM to work with SELinux on EL7 platforms
+- fixes to the condor_kbdd authentication to the X server
+- a fix to allow the condor_kbdd to work with shared port enabled
+- avoid crashes when using more than 1024 file descriptors on EL7
+- fixed a memory leak in the ClassAd split() function
+- condor_vacate will error out rather than ignore conflicting arguments
+- a bug fix to the JobRouter to properly process the queue on restart
+- a bug fix to prevent sending spurious data on a SOAP file transfer
+- a bug fix to always present jobs in order in condor_history
+
+* Mon Oct 12 2015 Tim Theisen <tim@cs.wisc.edu> - 8.5.0-1
+- multiple enhancements to the python bindings
+- the condor_schedd no longer changes the ownership of spooled job files
+- spooled job files are visible to only the user account by default
+- the condor_startd records when jobs are evicted by preemption or draining
+
+* Mon Sep 14 2015 Tim Theisen <tim@cs.wisc.edu> - 8.4.0-1
+- a Docker Universe to run a Docker container as an HTCondor job
+- the submit file can queue a job for each file found
+- the submit file can contain macros
+- a dry-run option to condor_submit to test the submit file without any actions
+- HTCondor pools can use IPv4 and IPv6 simultaneously
+- execute directories can be encrypted upon user or administrator request
+- Vanilla Universe jobs can utilize periodic application-level checkpoints
+- the administrator can establish job requirements
+- numerous scalability changes
+
+* Thu Aug 27 2015 Tim Theisen <tim@cs.wisc.edu> - 8.3.8-1
+- a script to tune Linux kernel parameters for better scalability
+- support for python bindings on Windows platforms
+- a mechanism to remove Docker images from the local machine
+
+* Thu Aug 13 2015 Tim Theisen <tim@cs.wisc.edu> - 8.2.9-1
+- a mechanism for the preemption of dynamic slots, such that the partitionable slot may use the dynamic slot in the match of a different job
+- default configuration bug fixes for the desktop policy, such that it can both start jobs and monitor the keyboard
+
+* Mon Jul 27 2015 Tim Theisen <tim@cs.wisc.edu> - 8.3.7-1
+- default configuration settings have been updated to reflect current usage
+- the ability to preempt dynamic slots, such that a job may match with a partitionable slot
+- the ability to limit the number of jobs per submission and the number of jobs per owner by setting configuration variables
+
+* Tue Jun 23 2015 Tim Theisen <tim@cs.wisc.edu> - 8.3.6-1
+- initial Docker universe support
+- IPv4/IPv6 mixed mode support
+
+* Mon Apr 20 2015 Tim Theisen <tim@cs.wisc.edu> - 8.3.5-1
+- new features that increase the power of job specification in the submit description file
+- RPMs for Red Hat Enterprise Linux 6 and 7 are modularized and only distributed via our YUM repository
+- The new condor-all RPM requires the other HTCondor RPMs of a typical HTCondor installation
+
+* Tue Apr 07 2015 Tim Theisen <tim@cs.wisc.edu> - 8.2.8-1
+- a bug fix to reconnect a TCP session when an HTCondorView collector restarts
+- a bug fix to avoid starting too many jobs, only to kill some chosen at random
+
+* Thu Mar 05 2015 Tim Theisen <tim@cs.wisc.edu> - 8.3.4-1
+- a bug fix for a problem that can cause jobs to not be matched to resources when the condor_schedd is flocking
+
+* Thu Feb 19 2015 Tim Theisen <tim@cs.wisc.edu> - 8.3.3-1
+- the ability to encrypt a job's directory on Linux execute hosts
+- enhancements to EC2 grid universe jobs
+- a more efficient query protocol, including the ability to query the condor_schedd daemon's autocluster set
+
+* Tue Feb 10 2015 Tim Theisen <tim@cs.wisc.edu> - 8.2.7-1
+- sendmail is used by default for sending notifications (CVE-2014-8126)
+- corrected input validation, which prevents daemon crashes
+- an update, such that grid jobs work within the current Google Compute Engine
+- a bug fix to prevent an infinite loop in the python bindings
+- a bug fix to prevent infinite recursion when evaluating ClassAd attributes
+
+* Tue Dec 23 2014 Tim Theisen <tim@cs.wisc.edu> - 8.3.2-1
+- the next installment of IPv4/IPv6 mixed mode support: a submit node can simultaneously interact with an IPv4 and an IPv6 HTCondor pool
+- scalability improvements: a reduced memory foot-print of daemons, a reduced number of TCP connections between submit and execute machines, and an improved responsiveness from a busy condor_schedd to queries
+
+* Tue Dec 16 2014 Tim Theisen <tim@cs.wisc.edu> - 8.2.6-1
+- a bug fix to the log rotation of the condor_schedd on Linux platforms
+- transfer_input_files now works for directories on Windows platforms
+- a correction of the flags passed to the mail program on Linux platforms
+- a RHEL 7 platform fix of a directory permission that prevented daemons from starting
+
+* Mon Dec 01 2014 Tim Theisen <tim@cs.wisc.edu> - 8.2.5-1
+- an updated RPM installation script that preserves a modified condor_config.local file
+- OpenSSL version 1.0.1j for Windows platforms
+
+* Wed Nov 12 2014 Tim Theisen <tim@cs.wisc.edu> - 8.2.4-1
+- a bug fix for an 8.2.3 condor_schedd that could not obtain a claim from an 8.0.x condor_startd
+- a bug fix for removed jobs that return to the queue
+- a workaround for a condor_schedd performance issue when handling a large number of jobs
+- a bug fix to prevent the condor_kbdd from crashing on Windows
+- a bug fix to correct the reporting of available disk on Windows
+
+* Wed Oct 01 2014 Tim Theisen <tim@cs.wisc.edu> - 8.2.3-1
+- support for Ubuntu 14.04 LTS, including support for the standard universe
+
+* Thu Sep 11 2014 Tim Theisen <tim@cs.wisc.edu> - 8.3.1-1
+- a variety of changes that reduce memory usage and improve performance
+- if cgroups are used to limit memory utilization, HTCondor sets both the memory and swap limits.
+
 * Wed Aug 27 2014 Carl Edquist <edquist@cs.wisc.edu> - 8.2.2-2.3
 - Include config file for MASTER_NEW_BINARY_RESTART = PEACEFUL (SOFTWARE-850)
 

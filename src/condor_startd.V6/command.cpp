@@ -25,6 +25,7 @@
 #include "vm_common.h"
 #include "ipv6_hostname.h"
 #include "consumption_policy.h"
+#include "credmon_interface.h"
 
 #include <map>
 using std::map;
@@ -461,6 +462,9 @@ command_release_claim( Service*, int cmd, Stream* stream )
 
 	State s = rip->state();
 
+	// stash current user
+	MyString curuser = rip->r_cur->client()->user();
+
 	//There are two cases: claim id is the current or the preempting claim
 	if( rip->r_pre && rip->r_pre->idMatches(id) ) {
 		// preempting claim is being canceled by schedd
@@ -469,7 +473,7 @@ command_release_claim( Service*, int cmd, Stream* stream )
 		rip->r_pre->scheddClosedClaim();
 		rip->removeClaim(rip->r_pre);
 		free(id);
-		return TRUE;
+		goto countres;
 	}
 	else if( rip->r_pre_pre && rip->r_pre_pre->idMatches(id) ) {
 		// preempting preempting claim is being canceled by schedd
@@ -478,7 +482,7 @@ command_release_claim( Service*, int cmd, Stream* stream )
 		rip->r_pre_pre->scheddClosedClaim();
 		rip->removeClaim(rip->r_pre_pre);
 		free(id);
-		return TRUE;
+		goto countres;
 	}
 	else if( rip->r_cur && rip->r_cur->idMatches(id) ) {
 		if( (s == claimed_state) || (s == matched_state) ) {
@@ -486,7 +490,8 @@ command_release_claim( Service*, int cmd, Stream* stream )
 						  "State change: received RELEASE_CLAIM command\n" );
 			free(id);
 			rip->r_cur->scheddClosedClaim();
-			return rip->release_claim();
+			rip->release_claim();
+			goto countres;
 		} else {
 			rip->log_ignore( cmd, s );
 			free(id);
@@ -499,6 +504,33 @@ command_release_claim( Service*, int cmd, Stream* stream )
 	rip->log_ignore( cmd, s );
 	free( id );
 	return FALSE;
+
+countres:
+
+	ClassAdList cal;
+	resmgr->makeAdList(&cal);
+        ClassAd *ad;
+	int ResCount = 0;
+	cal.Open();
+	while( (ad=cal.Next()) ) {
+                MyString remoteuser;
+                MyString name;
+                ad->LookupString("RemoteUser",remoteuser);
+                ad->LookupString("Name",name);
+		if(strcmp(curuser.c_str(), remoteuser.c_str()) == 0) {
+			ResCount++;
+		}
+	}
+#ifndef WIN32
+	if (ResCount == 0) {
+		dprintf(D_FULLDEBUG, "CREDMON: user %s no longer running jobs, mark cred for sweeping.\n", curuser.c_str());
+		credmon_mark_creds_for_sweeping(curuser.c_str());
+	} else {
+		dprintf(D_FULLDEBUG, "CREDMON: user %s still running %i jobs\n", curuser.c_str(), ResCount);
+	}
+#endif //WIN32
+
+	return TRUE;
 }
 
 int command_suspend_claim( Service*, int cmd, Stream* stream )
@@ -1257,15 +1289,23 @@ request_claim( Resource* rip, Claim *claim, char* id, Stream* stream )
 					ABORT;
 				}
 			}
+			Resource *parent = dslots[0]->get_parent();
+
 			for ( int i = 0; i < num_preempting; i++ ) {
 				// TODO Should we call retire_claim() to go through
 				//   vacating_act instead of straight to killing_act?
+				bool is_busy = dslots[i]->activity() != idle_act;
 				dslots[i]->kill_claim();
-				*(dslots[i]->get_parent()->r_attr) += *(dslots[i]->r_attr);
-				*(dslots[i]->r_attr) -= *(dslots[i]->r_attr);
+				if (is_busy) {
+					// if they were idle, kill_claim delete'd them
+					*(dslots[i]->get_parent()->r_attr) += *(dslots[i]->r_attr);
+					*(dslots[i]->r_attr) -= *(dslots[i]->r_attr);
+				}
 				// TODO Do we need to call refresh_classad() on either slot?
 			}
-			dslots[0]->get_parent()->refresh_classad( A_PUBLIC );
+			if (parent) {
+				parent->refresh_classad( A_PUBLIC );
+			}
 			free( dslots );
 		}
 	} else {
@@ -2569,6 +2609,8 @@ command_drain_jobs( Service*, int /*dc_cmd*/, Stream* s )
 	if( !ok ) {
 		response_ad.Assign(ATTR_ERROR_STRING,error_msg);
 		response_ad.Assign(ATTR_ERROR_CODE,error_code);
+	} else if ( ! new_request_id.empty()) {
+		response_ad.Assign(ATTR_REQUEST_ID, new_request_id);
 	}
 	s->encode();
 	if( !putClassAd(s, response_ad) || !s->end_of_message() ) {

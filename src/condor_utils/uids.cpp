@@ -950,11 +950,7 @@ init_condor_ids()
 	const char	*envName = EnvGetName( ENV_UG_IDS ); 
 	if( (env_val = getenv(envName)) ) {
 		val = env_val;
-	} else if( (config_val = param_without_default(envName)) ) {
-		// I had to change this to param_without_default because there's no way
-		// to put a default value of condor.condor in the default value table.
-		// In the future, there should be a way to call a function to find out
-		// the default value for a parameter, but for now this should work.
+	} else if( (config_val = param(envName)) ) {
 		val = config_val;
 	}
 	if( val ) {  
@@ -1675,15 +1671,17 @@ set_user_egid()
 		// belonging to his/her default group, and might be left
 		// with access to the groups that root belongs to, which 
 		// is a serious security problem.
+		// If we have a user UID but no username, still call setgroups(),
+		// as that will clear out the groups of the UID we're switching
+		// from. In that case, UserGidListSize will be 0, and UserGidList
+		// points to valid memory.
 		
-	if( UserName ) {
-		errno = 0;
-		if ( setgroups( UserGidListSize, UserGidList ) < 0 &&
-			 _setpriv_dologging ) {
-			dprintf( D_ALWAYS, 
-					 "set_user_egid - ERROR: setgroups for %s (gid %d) failed, "
-					 "errno: %s\n", UserName, UserGid, strerror(errno) );
-		}			
+	errno = 0;
+	if ( setgroups( UserGidListSize, UserGidList ) < 0 &&
+		 _setpriv_dologging ) {
+		dprintf( D_ALWAYS,
+				 "set_user_egid - ERROR: setgroups for %s (uid %d, gid %d) failed, "
+				 "errno: (%d) %s\n", UserName ? UserName : "<NULL>", UserUid, UserGid, errno, strerror(errno) );
 	}
 	return SET_EFFECTIVE_GID(UserGid);
 }
@@ -1720,23 +1718,25 @@ set_user_rgid()
 		// belonging to his/her default group, and might be left
 		// with access to the groups that root belongs to, which 
 		// is a serious security problem.
+		// If we have a user UID but no username, still call setgroups(),
+		// as that will clear out the groups of the UID we're switching
+		// from. In that case, UserGidListSize will be 0, and UserGidList
+		// points to valid memory.
 		
-	if( UserName ) {
-		errno = 0;
-		// UserGidList is guaranteed to be allocated and able to hold
-		// one more gid_t beyond UserGidListSize.
-		// If we have a TrackingGid, we stick it in that slot.
-		int size = UserGidListSize;
-		if ( TrackingGid > 0 ) {
-			UserGidList[size] = TrackingGid;
-			size++;
-		}
-		if ( setgroups( size, UserGidList ) < 0 &&
-			 _setpriv_dologging ) {
-			dprintf( D_ALWAYS, 
-					 "set_user_rgid - ERROR: setgroups for %s (gid %d) failed, "
-					 "errno: %d\n", UserName, UserGid, errno );
-		}
+	errno = 0;
+	// UserGidList is guaranteed to be allocated and able to hold
+	// one more gid_t beyond UserGidListSize.
+	// If we have a TrackingGid, we stick it in that slot.
+	int size = UserGidListSize;
+	if ( TrackingGid > 0 ) {
+		UserGidList[size] = TrackingGid;
+		size++;
+	}
+	if ( setgroups( size, UserGidList ) < 0 &&
+		 _setpriv_dologging ) {
+		dprintf( D_ALWAYS, 
+				 "set_user_rgid - ERROR: setgroups for %s (uid %d, gid %d) failed, "
+				 "errno: %d (%s)\n", UserName ? UserName : "<NULL>", UserUid, UserGid, errno, strerror(errno) );
 	}
 	return SET_REAL_GID(UserGid);
 }

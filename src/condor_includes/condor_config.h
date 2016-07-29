@@ -32,10 +32,12 @@
 #include <string>
 
 typedef std::vector<const char *> MACRO_SOURCES;
+class CondorError;
 namespace condor_params { typedef struct key_value_pair key_value_pair; }
 typedef const struct condor_params::key_value_pair MACRO_DEF_ITEM;
 #else // ! __cplusplus
 typedef void* MACRO_SOURCES; // placeholder for use in C
+typedef void  CondorError;   // placeholder for use in C
 typedef struct key_value_pair { const char * key; const void * def; } key_value_pair;
 typedef const struct key_value_pair MACRO_DEF_ITEM;
 #endif
@@ -67,6 +69,8 @@ typedef struct macro_meta {
 	    unsigned matches_default :1;
 	    unsigned inside          :1;
 	    unsigned param_table     :1;
+	    unsigned live            :1; // future
+	    unsigned checkpointed    :1; // future
 	  };
 	};
 	short int    source_id;    // index into MACRO_SOURCES table
@@ -95,7 +99,47 @@ typedef struct macro_set {
 	ALLOCATION_POOL apool;
 	MACRO_SOURCES sources;
 	MACRO_DEFAULTS * defaults; // optional reference to const defaults table
+	CondorError * errors; // optional error stack, if non NULL, use instead of fprintf to stderr
+#ifdef __cplusplus
+	// fprintf an error if the above errors field is NULL, otherwise format an error and add it to the above errorstack
+	// the preface is printed with fprintf but not with the errors stack.
+	void push_error(FILE * fh, int code, const char* preface, const char* format, ... ) CHECK_PRINTF_FORMAT(5,6);
+#endif
 } MACRO_SET;
+
+// this holds context during macro lookup/expansion
+typedef struct macro_eval_context {
+	const char *localname;
+	const char *subsys;  // default subsys prefix
+	const char *cwd;     // current working directory, used for $F macro expansion
+	char without_default;
+	char use_mask;
+	char also_in_config; // also do lookups in the config hashtable (used by submit)
+	char is_context_ex;
+#if defined(__cplusplus)
+	void init(const char * sub, char mask=2) {
+		memset(this, 0, sizeof(*this));
+		this->subsys = sub;
+		this->use_mask = mask;
+	}
+#endif
+} MACRO_EVAL_CONTEXT;
+
+#if defined(__cplusplus)
+typedef struct macro_eval_context_ex : macro_eval_context {
+	// to do lookups of last resort into the given Ad, set these. they are useually null.
+	const char *adname; // name prefix for lookups into the ad
+	const ClassAd * ad; // classad for lookups
+	std::string buffer; // temporary buffer used by lookup_macro when necessary
+	void init(const char * sub, char mask=2) {
+		memset(this, 0, sizeof(*this));
+		this->subsys = sub;
+		this->use_mask = mask;
+		this->is_context_ex = true;
+	}
+} MACRO_EVAL_CONTEXT_EX;
+#endif
+
 
 #if defined(__cplusplus)
 	extern MyString global_config_source;
@@ -171,23 +215,55 @@ typedef struct macro_set {
 								const char ** pdef_value,
 								const MACRO_META **ppmet);
 
-	
-	/** Look up a value by the name 'name' from the table 'table' which is table_size big.
-	
-	Values should have been inserted with insert() (above).
-	Treats name case insensitively.  Returns NULL if the name isn't in the
-	table.  On success returns a pointer to the associated value.  The
-	value is owned by the table; do not free it.
-	*/
-	MACRO_ITEM* find_macro_item (const char *name, MACRO_SET& set);
-	const char * lookup_macro (const char *name, const char *prefix, MACRO_SET& set, int use=3);
-	// lookup macro in the MACRO_SET defaults table.
-	// if the defaults table is the param table, and prefix is not NULL, then this first looks up in param subsys tables.
-	const char * lookup_macro_def(const char * name, const char* prefix, MACRO_SET& set, int use=3);
+	// lookup "name" in ALL of relevant tables as indicated by the MACRO_EVAL_CONTEXT.
+	// as soon as an item is found (even an empty item) lookup stops.  the lookup order is
+	//    localname.name in MACRO_SET
+	//    localname.name in MACRO_SET.defaults (if defaults is not null and context permits)
+	//    subsys.name in MACRO_SET
+	//    subsys.name in MACRO_SET.defaults  (if defaults is not null and context permits)
+	//    name in MACRO_SET
+	//    name in MACRO_SET.defaults  (if defaults is not null and context permits)
+	// returns:
+	//   NULL         if the macro does not exist in any of the tables
+	//   ""           if the macro exists but was not given a value.
+	//   otherwise the return value is a pointer to const memory owned by the MACRO_SET
+	//   it will be valid until the MACRO_SET is cleared (usually a reconfig)
+	//
+	const char * lookup_macro(const char * name, MACRO_SET& set, MACRO_EVAL_CONTEXT &ctx);
 
-	/*This is a faster version of lookup_macro that assumes the param name
-	  has already been prefixed with "prefix." if needed.*/
-	const char * lookup_macro_exact(const char *name, MACRO_SET& set, int use);
+	// find an item in the macro_set, but do not look in the defaults table.
+	// if prefix is not NULL, then "prefix.name" is looked up and "name" is NOT
+	// this function does not look in the defaults (param) table.
+	const char * lookup_macro_exact_no_default (const char *name, const char *prefix, MACRO_SET& set, int use=3);
+	const char * lookup_macro_exact_no_default (const char *name, MACRO_SET& set, int use=3);
+
+	// Expand parameter references of the form "left$(middle)right".  
+	// handle multiple and or nested references.
+	// Also expand references of the form "left$ENV(middle)right",
+	// replacing $ENV(middle) with getenv(middle).
+	// Also expands other $<func>() references such as $INT and $RANDOM_CHOICE
+	//
+	// value is the string to be expanded
+	// macro_set is a hash table (managed with insert() and lookup_macro)
+	// ctx   holds arguments that will be passed on to lookup_macro as needed.
+	//
+	// Returns malloc()ed memory; caller is responsible for calling free().
+	char * expand_macro(const char * value, MACRO_SET& macro_set, MACRO_EVAL_CONTEXT & ctx);
+	// expand only $(self) and $<function>(self), if ctx.subsys and/or ctx.localname is set
+	// then $(subsys.self) and/or $(localname.self) is also expanded.
+	char * expand_self_macro(const char *value, const char *self, MACRO_SET& macro_set, MACRO_EVAL_CONTEXT & ctx);
+
+	// this is the lowest level primative to doing a lookup in the macro set.
+	// it looks ONLY for an exact match of "name" in the given macro set and does
+	// not look in the defaults (param) table.
+	MACRO_ITEM* find_macro_item (const char *name, const char * prefix, MACRO_SET& set);
+
+	// lookup the macro name ONLY in the given subsys defaults table. subsys may not be null
+	const MACRO_DEF_ITEM * find_macro_subsys_def_item(const char * name, const char * subsys, MACRO_SET & set, int use);
+	// do an exact match lookup for the given name looking only in the defaults (param) table.
+	// if the name is "prefix.name" then it will look for "name" in the "prefix" defaults table
+	// OR "prefix.name" in the main defaults table.
+	const MACRO_DEF_ITEM * find_macro_def_item(const char * name, MACRO_SET & set, int use);
 
 	void optimize_macros(MACRO_SET& macro_set);
 
@@ -246,32 +322,14 @@ extern "C" {
 	int  set_runtime_config(char *admin, char *config);
 	int is_valid_param_name(const char *name);
 	char * is_valid_config_assignment(const char *config);
-	// this function allows tests to pretend that a param was set to a given value.	
+	// this function allows tests to pretend that a param was set to a given value. but it leaks memory if used frequently
     void  param_insert(const char * name, const char * value);
-	/** Expand parameter references of the form "left$(middle)right".  
-	
-	This is deceptively simple, but does handle multiple and or nested
-	references.  If self is not NULL, then we only expand references to to the
-	parameter specified by self.  This is used when we want to expand
-	self-references only.
+	// this function allows tests to set the actual backend data for a param value and returns the old value.
+	// make sure that live_value stays in scope until you put the old value back
+	const char * set_live_param_value(const char * name, const char * live_value);
 
-	table is a hash table (managed with insert() and macro_lookup)
-	that contains the various $(middle)s.
-
-	Also expand references of the form "left$ENV(middle)right",
-	replacing $ENV(middle) with getenv(middle).
-
-	Also expand references of the form "left$RANDOM_CHOICE(middle)right".
-
-	NOTE: Returns malloc()ed memory; caller is responsible for calling free().
-	*/
-	char * expand_macro (const char *value, MACRO_SET& macro_set,
-						 bool use_default_param_table=false,
-						 const char *subsys=NULL, int use=2);
-	// Iterator for the hash array managed by insert() and expand_macro().  See
-	// hash_iter_begin(), hash_iter_next(), hash_iter_key(), hash_iter_value(),
-	// and hash_iter_delete() for details.
 } // end extern "C"
+
 
 // the HASHITER can only be defined with c++ linkage
 class HASHITER {
@@ -305,7 +363,7 @@ the char* return value should be freed using free()
 BEGIN_C_DECLS
 char * expand_param (const char *str); // same as below but defaults subsys and use flags
 END_C_DECLS
-char * expand_param (const char *str, const char *subsys, int use);
+char * expand_param (const char *str, const char * localname, const char *subsys, int use);
 inline bool expand_param (const char *str, std::string & expanded) {
 	char * p = expand_param(str);
 	if (!p) return false;
@@ -326,6 +384,28 @@ int write_config_file(const char* pathname, int options);
 
 extern "C" {
 
+#if 1
+	/** Find next $$(MACRO) or $$([expression]) in value
+		search begins at pos and continues to terminating null
+
+	- value - The null-terminated string to scan. WILL BE MODIFIED!
+
+	- pos - 0-indexed position in value to start scanning at.
+
+	- left - OUTPUT. *leftp will be set to value+search_pos.  It
+	  will be null terminated at the first $ for the next $$(MACRO) found.
+
+	- name - OUTPUT. The name of the MACRO (the bit between the
+	  parenthesis).  Pointer into value.  Null terminated at the
+	  closing parenthesis.
+
+	- right - OUTPUT. Everything to the right of the close paren for the $$(MACRO).
+	  Pointer into value.
+
+	returns non-zero if a $$() is found, zero if not found.
+	*/
+	int next_dollardollar_macro(char * value, int pos, char** left, char** name, char** right);
+#else
 
 	/** Find next $(MACRO) or $$(MACRO) in a string
 
@@ -357,6 +437,7 @@ extern "C" {
 	int find_config_macro( register char *value, register char **leftp,
 		register char **namep, register char **rightp,
 		const char *self=NULL, bool getdollardollar=false, int search_pos=0);
+#endif
 
 	void init_config (int options);
 }
@@ -367,8 +448,7 @@ BEGIN_C_DECLS
 
 	char * get_tilde(void);
 	char * param ( const char *name );
-	char * param_without_default(const char *name);
-	char * param_with_default_abort(const char *name, int abort);
+
 	/** Insert a value into a hash table.
 
 	The value of 'value' is associated with the name 'name'.  This is
@@ -382,7 +462,7 @@ BEGIN_C_DECLS
 	extern const MACRO_SOURCE WireMacro;
 	extern const MACRO_SOURCE DetectedMacro;
 
-	void insert (const char *name, const char *value, MACRO_SET& macro_set, const MACRO_SOURCE & source);
+	void insert_macro (const char *name, const char *value, MACRO_SET& macro_set, const MACRO_SOURCE & source, MACRO_EVAL_CONTEXT & ctx);
 	inline const char * macro_source_filename(MACRO_SOURCE& source, MACRO_SET& set) { return set.sources[source.id]; }
 	
 	/** Sets the whether or not a macro has actually been used
@@ -391,7 +471,73 @@ BEGIN_C_DECLS
 	void clear_macro_use_count (const char *name, MACRO_SET& macro_set);
 	int get_macro_use_count (const char *name, MACRO_SET& macro_set);
 	int get_macro_ref_count (const char *name, MACRO_SET& macro_set);
-	bool config_test_if_expression(const char * expr, bool & result, std::string & err_reason);
+	bool config_test_if_expression(const char * expr, bool & result, const char * localname, const char * subsys, std::string & err_reason);
+
+	// macro stream class wraps up an fp or string so that the macro parser can read from either.
+	//
+#define USE_MACRO_STREAMS 1
+#ifdef USE_MACRO_STREAMS
+	class MacroStream {
+	public:
+		virtual ~MacroStream() {};
+		virtual char * getline(int gl_opt) = 0;
+		virtual MACRO_SOURCE& source() = 0;
+	};
+
+	// A MacroStream that uses, but does not own a FILE* and MACRO_SOURCE
+	class MacroStreamYourFile : public MacroStream {
+	public:
+		MacroStreamYourFile(FILE * _fp, MACRO_SOURCE& _src) : fp(_fp), src(&_src) {}
+		virtual ~MacroStreamYourFile() { fp = NULL; src = NULL; }
+		virtual char * getline(int gl_opt);
+		virtual MACRO_SOURCE& source() { return *src; }
+		void set(FILE* _fp, MACRO_SOURCE& _src) { fp =  _fp; src = &_src; }
+		void reset() { fp = NULL; src = NULL; }
+	protected:
+		FILE * fp;
+		MACRO_SOURCE * src;
+	};
+
+	// A MacroStream that owns the FILE* and MACRO_SOURCE
+	class MacroStreamFile : public MacroStream {
+	public:
+		MacroStreamFile() : fp(NULL) { memset(&src, 0, sizeof(src)); }
+		virtual ~MacroStreamFile() { if (fp) fclose(fp); fp = NULL; memset(&src, 0, sizeof(src)); }
+		virtual char * getline(int gl_opt);
+		virtual MACRO_SOURCE& source() { return src; }
+		bool open(const char * filename, bool is_command, MACRO_SET& set, std::string &errmsg);
+		int  close(MACRO_SET& set, int parsing_return_val);
+	protected:
+		FILE * fp;
+		MACRO_SOURCE src;
+	};
+
+	class MacroStreamCharSource : public MacroStream {
+	public:
+		MacroStreamCharSource() 
+			: input(NULL)
+			, cbBufAlloc(0)
+			, file_string(NULL)
+		{
+			memset(&src, 0, sizeof(src));
+		}
+		virtual ~MacroStreamCharSource() { if (input) delete input; input = NULL; }
+		virtual char * getline(int gl_opt);
+		virtual MACRO_SOURCE& source() { return src; }
+		bool open(const char * src_string, MACRO_SOURCE & _src);
+		int  close(MACRO_SET& set, int parsing_return_val);
+		int  load(FILE* fp, MACRO_SOURCE & _src, bool preserve_linenumbers = false);
+		void rewind();
+	protected:
+		StringTokenIterator * input;
+		MACRO_SOURCE src;
+		size_t cbBufAlloc;
+		auto_free_ptr line_buf;
+		auto_free_ptr file_string; // holds file content when load is called.
+	};
+
+
+#endif // USE_MACRO_STREAMS
 
 	// populate a MACRO_SET from either a config file or a submit file.
 	#define READ_MACROS_SUBMIT_SYNTAX           0x01
@@ -416,16 +562,20 @@ BEGIN_C_DECLS
 		void * pvParseData);
 		*/
 
-	int Parse_config_string(MACRO_SOURCE& source, int depth, const char * config, MACRO_SET& macro_set, const char * subsys);
+	int Parse_config_string(MACRO_SOURCE& source, int depth, const char * config, MACRO_SET& macro_set, MACRO_EVAL_CONTEXT & ctx);
 
 	int
 	Parse_macros(
+#ifdef USE_MACRO_STREAMS
+		MacroStream& ms,
+#else
 		FILE* conf_fp,
 		MACRO_SOURCE& FileMacro,
+#endif
 		int depth, // a simple recursion detector
 		MACRO_SET& macro_set,
 		int options,
-		const char * subsys,
+		MACRO_EVAL_CONTEXT * pctx,
 		std::string& config_errmsg,
 		int (*fnSubmit)(void* pv, MACRO_SOURCE& source, MACRO_SET& set, char * line, std::string & errmsg),
 		void * pvSubmitData);

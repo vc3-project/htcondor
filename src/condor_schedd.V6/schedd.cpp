@@ -115,6 +115,7 @@ extern GridUniverseLogic* _gridlogic;
 #include "condor_qmgr.h"
 #include "condor_vm_universe_types.h"
 #include "enum_utils.h"
+#include "credmon_interface.h"
 
 extern "C"
 {
@@ -590,6 +591,7 @@ Scheduler::Scheduler() :
 	JobStopDelay = 0;
 	JobStopCount = 1;
 	RequestClaimTimeout = 0;
+	MaxRunningSchedulerJobsPerOwner = INT_MAX;
 	MaxJobsRunning = 0;
 	MaxJobsSubmitted = INT_MAX;
 	MaxJobsPerOwner = INT_MAX;
@@ -880,6 +882,8 @@ Scheduler::timeout()
 	SchedDInterval.expediteNextRun();
 	unsigned int time_to_next_run = SchedDInterval.getTimeToNextRun();
 
+	//dprintf_on_function_exit on_exit(true, D_FULLDEBUG, "Scheduler::timeout() InWalk=%d time_to_next_run = %u\n", InWalkJobQueue(), time_to_next_run );
+
 	if ( time_to_next_run > 0 ) {
 		if (!min_interval_timer_set) {
 			dprintf(D_FULLDEBUG,"Setting delay until next queue scan to %u seconds\n",time_to_next_run);
@@ -1153,7 +1157,7 @@ void Scheduler::userlog_file_cache_erase(const int& cluster, const int& proc) {
     // possible userlog file names associated with this job
     if (getPathToUserLog(ad, userlog_name)) log_names.push_back(userlog_name.Value());
     if (getPathToUserLog(ad, dagman_log_name, ATTR_DAGMAN_WORKFLOW_LOG)) log_names.push_back(dagman_log_name.Value());
-    
+
     for (std::vector<char const*>::iterator j(log_names.begin());  j != log_names.end();  ++j) {
 
         // look for file name in the cache
@@ -1181,8 +1185,11 @@ Scheduler::count_jobs()
 {
 	ClassAd * cad = m_adSchedd;
 
+	//dprintf_on_function_exit on_exit(true, D_FULLDEBUG, "count_jobs()\n");
+
 	 // copy owner data to old-owners table
-	time_t UnusedSubmitterLifetime = 60*60*24*7; // 1 week.
+	time_t AbsentSubmitterLifetime = param_integer("ABSENT_SUBMITTER_LIFETIME", 60*60*24*7); // 1 week.
+	time_t AbsentSubmitterUpdateRate = param_integer("ABSENT_SUBMITTER_UPDATE_RATE", 60*5); // 5 min
 
 	JobsRunning = 0;
 	JobsIdle = 0;
@@ -1238,7 +1245,7 @@ Scheduler::count_jobs()
 				// Sum up the # of cpus claimed by this user and advertise it as
 				// WeightedJobsRunning. 
 
-			int job_weight = calcSlotWeight(rec->my_match_ad);
+			int job_weight = calcSlotWeight(rec);
 			
 			Owner->num.WeightedJobsRunning += job_weight;
 			Owner->num.JobsRunning++;
@@ -1301,6 +1308,7 @@ Scheduler::count_jobs()
 			SchedUniverseJobsIdle );
 	dprintf( D_FULLDEBUG, "N_Owners = %d\n", NumOwners );
 	dprintf( D_FULLDEBUG, "MaxJobsRunning = %d\n", MaxJobsRunning );
+	dprintf( D_FULLDEBUG, "MaxRunningSchedulerJobsPerOwner = %d\n", MaxRunningSchedulerJobsPerOwner );
 
 	// later when we compute job priorities, we will need PrioRec
 	// to have as many elements as there are jobs in the queue.  since
@@ -1311,6 +1319,9 @@ Scheduler::count_jobs()
 	
 	cad->Assign(ATTR_NUM_USERS, NumOwners);
 	cad->Assign(ATTR_MAX_JOBS_RUNNING, MaxJobsRunning);
+	if (MaxRunningSchedulerJobsPerOwner >= 0 && MaxRunningSchedulerJobsPerOwner < MaxJobsPerOwner) {
+		cad->Assign( "MaxRunningSchedulerJobsPerOwner", MaxRunningSchedulerJobsPerOwner );
+	}
 
 	cad->AssignExpr(ATTR_START_LOCAL_UNIVERSE, this->StartLocalUniverse);
 	// m_adBase->AssignExpr(ATTR_START_LOCAL_UNIVERSE, this->StartLocalUniverse);
@@ -1404,7 +1415,7 @@ Scheduler::count_jobs()
 		// Update collectors
 	int num_updates = daemonCore->sendUpdates(UPDATE_SCHEDD_AD, cad, NULL, true);
 	dprintf( D_FULLDEBUG, 
-			 "Sent HEART BEAT ad to %d collectors. Number of submittors=%d\n",
+			 "Sent HEART BEAT ad to %d collectors. Number of active submittors=%d\n",
 			 num_updates, NumOwners );
 
 	// send the schedd ad to our flock collectors too, so we will
@@ -1437,6 +1448,8 @@ Scheduler::count_jobs()
 	// Create a new add for the per-submitter attribs 
 	// and chain it to the base ad.
 
+	time_t update_time = time(0); // time at which submitter ads are updated
+
 	ClassAd pAd;
 	pAd.ChainToAd(m_adBase);
 	pAd.Assign(ATTR_SUBMITTER_TAG,HOME_POOL_SUBMITTER_TAG);
@@ -1444,19 +1457,23 @@ Scheduler::count_jobs()
 	for (OwnerDataMap::iterator it = Owners.begin(); it != Owners.end(); ++it) {
 		OwnerData & Owner = it->second;
 		const char * owner_name = Owner.Name();
+		if (Owner.num.Hits == 0 && Owner.absentUpdateSent) {
+			dprintf( D_FULLDEBUG, "Skipping send ad to collectors for %s@%s Hit=%d Tot=%d Idle=%d Run=%d\n",
+				owner_name, UidDomain, Owner.num.Hits, Owner.num.JobsCounted, Owner.num.JobsIdle, Owner.num.JobsRunning );
+			continue;
+		}
 		if ( !fill_submitter_ad(pAd, Owner, -1, D_FULLDEBUG) ) continue;
-
-	  dprintf( D_ALWAYS, "Sent ad to central manager for %s@%s\n", 
-			   owner_name, UidDomain );
 
 #if defined(HAVE_DLOPEN)
 	  ScheddPluginManager::Update(UPDATE_SUBMITTOR_AD, &pAd);
 #endif
 
-		// Update collectors
-	  num_updates = daemonCore->sendUpdates(UPDATE_SUBMITTOR_AD, &pAd, NULL, true);
-	  dprintf( D_ALWAYS, "Sent ad to %d collectors for %s@%s\n", 
-			   num_updates, owner_name, UidDomain );
+		// Update non-flock collectors
+		num_updates = daemonCore->sendUpdates(UPDATE_SUBMITTOR_AD, &pAd, NULL, true);
+		Owner.lastUpdateTime = update_time;
+		Owner.absentUpdateSent = (Owner.num.Hits == 0);
+		dprintf( D_FULLDEBUG, "Sent ad to %d collectors for %s@%s Hit=%d Tot=%d Idle=%d Run=%d\n",
+			num_updates, owner_name, UidDomain, Owner.num.Hits, Owner.num.JobsCounted, Owner.num.JobsIdle, Owner.num.JobsRunning );
 	}
 
 	// update collector of the pools with which we are flocking, if
@@ -1498,7 +1515,7 @@ Scheduler::count_jobs()
 					!strcmp(mRec->pool, flock_neg->pool())) {
 					Owner->num.JobsFlockedHere++;
 
-					Owner->num.WeightedJobsFlockedHere += calcSlotWeight(mRec->my_match_ad);
+					Owner->num.WeightedJobsFlockedHere += calcSlotWeight(mRec);
 				}
 			}
 
@@ -1576,23 +1593,29 @@ Scheduler::count_jobs()
 		// we don't want to send the, so we continue to the next
 		if (Owner.num.Hits > 0) continue;
 
+#ifndef WIN32
+		// mark user creds for sweeping.
+		dprintf( D_ALWAYS, "ZKM: creating mark file for user %s\n", Owner.Name());
+		credmon_mark_creds_for_sweeping(Owner.Name());
+#endif // WIN32
+
 		submitter_name.formatstr("%s@%s", Owner.Name(), UidDomain);
 		int old_flock_level = Owner.OldFlockLevel;
 
 		// expire and mark for removal Owners that have not had any hits (i.e jobs in the queue)
-		// for more than UnusedSubmitterLifetime. 
+		// for more than AbsentSubmitterLifetime. 
 		if ( ! Owner.LastHitTime) {
 			// this is unxpected, we really should never get here with LastHitTime of 0, but in case
 			// we do. start the decay timer now.
 			Owner.LastHitTime = current_time;
-		} else if (UnusedSubmitterLifetime && (current_time - Owner.LastHitTime > UnusedSubmitterLifetime)) {
+		} else if (AbsentSubmitterLifetime && (current_time - Owner.LastHitTime > AbsentSubmitterLifetime)) {
 			// Now that we've finished using Owner.Name, we can
 			// free it.  this marks the entry as unused
 			Owner.name.clear();
 		}
 
 		pAd.Assign(ATTR_NAME, submitter_name.Value());
-		dprintf (D_FULLDEBUG, "Changed attribute: %s = %s\n", ATTR_NAME, submitter_name.Value());
+		//dprintf (D_FULLDEBUG, "Changed attribute: %s = %s\n", ATTR_NAME, submitter_name.Value());
 
 #if defined(HAVE_DLOPEN)
 	// update plugins
@@ -1600,11 +1623,20 @@ Scheduler::count_jobs()
 	ScheddPluginManager::Update(UPDATE_SUBMITTOR_AD, &pAd);
 #endif
 
+		if (Owner.lastUpdateTime == update_time) continue; // if we already sent this owner, skip updating
+		if (Owner.lastUpdateTime + AbsentSubmitterUpdateRate > update_time) {
+			dprintf( D_FULLDEBUG, "Skipping absent submitter ad for %s. lastupdate=%d Hit=%d Tot=%d Idle=%d Run=%d\n",
+					submitter_name.c_str(), (int)(update_time - Owner.lastUpdateTime),
+					Owner.num.Hits, Owner.num.JobsCounted, Owner.num.JobsIdle, Owner.num.JobsRunning );
+			continue; // we updated this owner recently
+		}
+
 		// Update collectors
-	  int num_udates = 
-		  daemonCore->sendUpdates(UPDATE_SUBMITTOR_AD, &pAd, NULL, true);
-	  dprintf(D_ALWAYS, "Sent owner (0 jobs) ad to %d collectors\n",
-			  num_udates);
+		int num_udates = daemonCore->sendUpdates(UPDATE_SUBMITTOR_AD, &pAd, NULL, true);
+		dprintf(D_FULLDEBUG, "Sent absent submitter ad to %d collectors for %s. lastupdate=%d Hit=%d Tot=%d Idle=%d Run=%d\n",
+				num_udates, submitter_name.c_str(), (int)(update_time - Owner.lastUpdateTime),
+				Owner.num.Hits, Owner.num.JobsCounted, Owner.num.JobsIdle, Owner.num.JobsRunning );
+		Owner.lastUpdateTime = update_time;
 
 	  // also update all of the flock hosts
 	  Daemon *da;
@@ -1828,25 +1860,25 @@ int Scheduler::command_history(int, Stream* stream)
 	std::string requirements_str;
 	unparser.Unparse(requirements_str, requirements);
 
+	classad::ExprTree * since_expr = queryAd.Lookup("Since");
+	std::string since_str;
+	if (since_expr) { unparser.Unparse(since_str, since_expr); }
+
 	classad::Value value;
-	classad::ExprList *list = NULL;
-	if ((queryAd.find(ATTR_PROJECTION) != queryAd.end()) &&
-		(!queryAd.EvaluateAttr(ATTR_PROJECTION, value) || !value.IsListValue(list)))
-	{
-		return sendHistoryErrorAd(stream, 2, "Unable to evaluate projection list");
+	classad::References projection;
+	int proj_err = mergeProjectionFromQueryAd(queryAd, ATTR_PROJECTION, projection, true);
+	if (proj_err < 0) {
+		if (proj_err == -1) {
+			return sendHistoryErrorAd(stream, 2, "Unable to evaluate projection list");
+		}
+		return sendHistoryErrorAd(stream, 3, "Unable to convert projection list to string list");
 	}
 	std::stringstream ss;
 	bool multiple = false;
-	if (list) for (classad::ExprList::const_iterator it = list->begin(); it != list->end(); it++)
-	{
-		std::string attr;
-		if (!(*it)->Evaluate(value) || !value.IsStringValue(attr))
-		{
-			return sendHistoryErrorAd(stream, 3, "Unable to convert projection list to string");
-		}
+	for (classad::References::const_iterator it = projection.begin(); it != projection.end(); ++it) {
 		if (multiple) ss << ",";
 		multiple = true;
-		ss << attr;
+		ss << *it;
 	}
 
 	int matchCount = -1;
@@ -1857,16 +1889,23 @@ int Scheduler::command_history(int, Stream* stream)
 	std::stringstream ss2;
 	ss2 << matchCount;
 
+	bool streamresults = false;
+	if (!queryAd.EvaluateAttrBool("StreamResults", streamresults)) {
+		streamresults = false;
+	}
+
 	if (m_history_helper_count >= m_history_helper_max) {
 		if (m_history_helper_queue.size() > 1000) {
 			return sendHistoryErrorAd(stream, 9, "Cowardly refusing to queue more than 1000 requests.");
 		}
 		classad_shared_ptr<Stream> stream_shared(stream);
-		HistoryHelperState state(stream_shared, requirements_str, ss.str(), ss2.str());
+		HistoryHelperState state(stream_shared, requirements_str, since_str, ss.str(), ss2.str());
+		state.m_streamresults = streamresults;
 		m_history_helper_queue.push_back(state);
 		return KEEP_STREAM;
 	} else {
-		HistoryHelperState state(*stream, requirements_str, ss.str(), ss2.str());
+		HistoryHelperState state(*stream, requirements_str, since_str, ss.str(), ss2.str());
+		state.m_streamresults = streamresults;
 		return history_helper_launcher(state);
 	}
 }
@@ -1883,27 +1922,63 @@ int Scheduler::history_helper_reaper(int, int) {
 
 int Scheduler::history_helper_launcher(const HistoryHelperState &state) {
 
-	std::string history_helper;
-	if ( !param(history_helper, "HISTORY_HELPER") ) {
-		char *tmp = expand_param("$(LIBEXEC)/condor_history_helper");
-		history_helper = tmp;
-		free(tmp);
+	auto_free_ptr history_helper(param("HISTORY_HELPER"));
+	if ( ! history_helper) {
+#ifdef WIN32
+		history_helper.set(expand_param("$(LIBEXEC)\\condor_history_helper.exe"));
+#else
+		history_helper.set(expand_param("$(LIBEXEC)/condor_history_helper"));
+#endif
 	}
 	ArgList args;
-	args.AppendArg("condor_history_helper");
-	args.AppendArg("-f");
-	args.AppendArg("-t");
-	args.AppendArg(state.Requirements());
-	args.AppendArg(state.Projection());
-	args.AppendArg(state.MatchCount());
-	std::stringstream ss;
-	ss << param_integer("HISTORY_HELPER_MAX_HISTORY", 10000);
-	args.AppendArg(ss.str());
+	if (strstr(history_helper.ptr(), "_helper")) {
+		dprintf(D_ALWAYS, "Using obsolete condor_history_helper arguments\n");
+		args.AppendArg("condor_history_helper");
+		args.AppendArg("-f");
+		args.AppendArg("-t");
+		// NOTE: before 8.4.8 and 8.5.6 the argument order was: requirements projection match max
+		// starting with 8.4.8 and 8.5.6 the argument order was changed to: match max requirements projection
+		// this change was made so that projection could be empty without causing problems on Windows.
+		args.AppendArg(state.m_streamresults ? "true" : "false"); // new for 8.4.9
+		args.AppendArg(state.MatchCount());
+		args.AppendArg(param_integer("HISTORY_HELPER_MAX_HISTORY", 10000));
+		args.AppendArg(state.Requirements());
+		args.AppendArg(state.Projection());
+		MyString myargs;
+		args.GetArgsStringForLogging(&myargs);
+		dprintf(D_FULLDEBUG, "invoking %s %s\n", history_helper.ptr(), myargs.c_str());
+	} else {
+		// pass arguments in the format that condor_history wants
+		args.AppendArg("condor_history");
+		args.AppendArg("-inherit"); // tell it to write to an inherited socket
+		if (state.m_streamresults) { args.AppendArg("-stream-results"); }
+		if ( ! state.MatchCount().empty()) {
+			args.AppendArg("-match");
+			args.AppendArg(state.MatchCount());
+		}
+		args.AppendArg("-scanlimit");
+		args.AppendArg(param_integer("HISTORY_HELPER_MAX_HISTORY", 10000));
+		if ( ! state.Since().empty()) {
+			args.AppendArg("-since");
+			args.AppendArg(state.Since());
+		}
+		if ( ! state.Requirements().empty()) {
+			args.AppendArg("-constraint");
+			args.AppendArg(state.Requirements());
+		}
+		if ( ! state.Projection().empty()) {
+			args.AppendArg("-attributes");
+			args.AppendArg(state.Projection());
+		}
+		MyString myargs;
+		args.GetArgsStringForLogging(&myargs);
+		dprintf(D_FULLDEBUG, "invoking %s %s\n", history_helper.ptr(), myargs.c_str());
+	}
 
 	Stream *inherit_list[] = {state.GetStream(), NULL};
 
 	FamilyInfo fi;
-	pid_t pid = daemonCore->Create_Process(history_helper.c_str(), args, PRIV_ROOT, m_history_helper_rid,
+	pid_t pid = daemonCore->Create_Process(history_helper.ptr(), args, PRIV_ROOT, m_history_helper_rid,
 		false, false, NULL, NULL, NULL, inherit_list);
 	if (!pid)
 	{
@@ -2039,7 +2114,7 @@ QueryJobAdsContinuation::finish(Stream *stream) {
 	return KEEP_STREAM;
 }
 
-int Scheduler::command_query_job_ads(int, Stream* stream)
+int Scheduler::command_query_job_ads(int cmd, Stream* stream)
 {
 	ClassAd queryAd;
 
@@ -2059,14 +2134,8 @@ int Scheduler::command_query_job_ads(int, Stream* stream)
 		return command_query_job_aggregates(queryAd, stream);
 	}
 
-	// REMOVE this code once we have working user detection
-	//
+	PRAGMA_REMIND("reduce dpf_level for CONDOR_Q_ONLY_MY_JOBS feature before it goes into stable.")
 	int dpf_level = D_ALWAYS; // D_COMMAND | D_FULLDEBUG
-	if (IsDebugCatAndVerbosity(dpf_level)) {
-		ReliSock* rsock = (ReliSock*)stream;
-		const char * p0wn = rsock->getOwner();
-		dprintf(dpf_level, "QUERY_JOB_ADS detected owner = %s\n", p0wn ? p0wn : "<null>");
-	}
 
 	// If the query request that only the querier's jobs be returned
 	// we have to figure out who the quierier is and add a clause to the requirements expression
@@ -2077,11 +2146,21 @@ int Scheduler::command_query_job_ads(int, Stream* stream)
 		was_my_jobs = my_jobs_expr != NULL;
 	}
 	if (my_jobs_expr) {
+		// if this is a 'only my jobs' query, then we want to use the authenticated
+		// identity of the caller is. if the connection was already authenticated, use that owner.
 		std::string owner;
-		//PRAGMA_REMIND("figure out username of invoker, and create a my_jobs_expr for them.")
 		ReliSock* rsock = (ReliSock*)stream;
+		bool authenticated = false;
+		if (rsock->triedAuthentication()) {
+			authenticated = rsock->isAuthenticated();
+			dprintf(dpf_level, "%s command %s\n", getCommandStringSafe(cmd),
+				authenticated ? "was authenticated" : "failed to authenticate");
+		}
 		const char * p0wn = rsock->getOwner();
-		if (p0wn && MATCH == strcasecmp(p0wn, "unauthenticated")) p0wn = NULL;
+		if (p0wn && ( ! authenticated || MATCH == strcasecmp(p0wn, "unauthenticated"))) p0wn = NULL;
+		if (IsDebugCatAndVerbosity(dpf_level)) {
+			dprintf(dpf_level, "QUERY_JOB_ADS detected owner = %s\n", p0wn ? p0wn : "<null>");
+		}
 
 		long long val;
 		// if MyJobs is a literal true/false, then we are being asked to either NOT show
@@ -2093,23 +2172,28 @@ int Scheduler::command_query_job_ads(int, Stream* stream)
 				if (p0wn) owner = p0wn;
 			} else {
 				// false means we don't want just this owners jobs. set my_jobs_expr to NULL to signal that.
+				owner.clear();
 				my_jobs_expr = NULL;
 			}
 		} else {
-			// if my_jobs_expr is not literal true/valse, then we assume it is Owner==Me
-			// and that ME is also an attribute in the query ad. With Me being a guess as
-			// to the correct owner.  We will use the suggested value of Me unless we can
-			// determine a better value. 
-			classad::ExprTree * me_expr = queryAd.Lookup("Me");
-			if (me_expr && ExprTreeIsLiteralString(me_expr, owner)) {
-				// owner is set, buf if owner is a queue superuser, then we still want to show all jobs.
-				if (isQueueSuperUser(owner.c_str())) {
-					my_jobs_expr = NULL; 
-				}
+			if (p0wn) {
+				owner = p0wn;
 			} else {
-				my_jobs_expr = NULL;
+				// if my_jobs_expr is not literal true/valse, then we assume it is Owner==Me
+				// and that ME is also an attribute in the query ad. With Me being a guess as
+				// to the correct owner.  We will use the suggested value of Me unless we can
+				// determine a better value. 
+				classad::ExprTree * me_expr = queryAd.Lookup("Me");
+				if ( ! me_expr || ! ExprTreeIsLiteralString(me_expr, owner)) {
+					owner.clear();
+					my_jobs_expr = NULL; // no me or it's not a string, so show all jobs.
+				}
 			}
-			if (p0wn) owner = p0wn;
+		}
+		// at this point owner is valid or empty.
+		// if empty, or the owner is a queue superuser show all jobs.
+		if (owner.empty() || isQueueSuperUser(owner.c_str())) {
+			my_jobs_expr = NULL; 
 		}
 
 		// at this point owner should be set if my_jobs_expr is non-null
@@ -2126,7 +2210,6 @@ int Scheduler::command_query_job_ads(int, Stream* stream)
 
 	classad::ExprTree *requirements_in = queryAd.Lookup(ATTR_REQUIREMENTS);
 	classad::ExprTree *requirements = my_jobs_expr;
-#if 1 // new for 8.5.3, use my_jobs_expr, or requirements (or both if both are set)
 	if (requirements_in) {
 		bool bval = false;
 		requirements_in = SkipExprParens(requirements_in);
@@ -2137,7 +2220,7 @@ int Scheduler::command_query_job_ads(int, Stream* stream)
 			requirements = requirements_in->Copy();
 		} else if ( ! ExprTreeIsLiteralBool(requirements_in, bval) || bval) {
 			// if we have both requirements, and requirements_in, and the requirements_in is not a trivial 'true' 
-			// we need to join them both requirements with a logical && op.
+			// we need to join them both with a logical && op.
 			requirements = JoinExprTreeCopiesWithOp(classad::Operation::LOGICAL_AND_OP, my_jobs_expr, requirements_in);
 			delete my_jobs_expr; my_jobs_expr = NULL;
 		}
@@ -2150,14 +2233,6 @@ int Scheduler::command_query_job_ads(int, Stream* stream)
 		dprintf(dpf_level, "QUERY_JOB_ADS %d effective requirements: %s\n", was_my_jobs, ExprTreeToString(requirements));
 	}
 	classad_shared_ptr<classad::ExprTree> requirements_ptr(requirements);
-#else
-	if (!requirements) {
-		classad::Value val; val.SetBooleanValue(true);
-		requirements = classad::Literal::MakeLiteral(val);
-		if (!requirements) return sendJobErrorAd(stream, 1, "Failed to create default requirements");
-	}
-	classad_shared_ptr<classad::ExprTree> requirements_ptr(requirements->Copy());
-#endif
 
 	int resultLimit=-1;
 	if (!queryAd.EvaluateAttrInt(ATTR_LIMIT_RESULTS, resultLimit)) {
@@ -2408,7 +2483,15 @@ clear_autocluster_id(JobQueueJob *job, const JOB_ID_KEY & /*jid*/, void *)
 	// This function, given a job, calculates the "weight", or cost
 	// of the slot for accounting purposes.  Usually the # of cpus
 int 
-Scheduler::calcSlotWeight(ClassAd *machine) {
+Scheduler::calcSlotWeight(match_rec *mrec) {
+	if (!mrec) {
+		// shouldn't ever happen, but be defensive
+		return 1;
+	}
+
+
+		// machine may be null	
+	ClassAd *machine = mrec->my_match_ad;
 	int job_weight = 1;
 	if (m_use_slot_weights && slotWeight && machine) {
 			// if the schedd slot weight expression is set and parses,
@@ -2424,6 +2507,19 @@ Scheduler::calcSlotWeight(ClassAd *machine) {
 			if(0 == machine->LookupInteger(ATTR_CPUS, job_weight)) {
 				job_weight = 1; // or fall back to one if CPUS isn't in the startds
 			}
+		} else {
+			// machine == NULL, this happens on schedd restart and reconnect
+			// calculate using request_* attributes, as we do with idle
+			ClassAd *job = GetJobAd(mrec->cluster, mrec->proc);
+
+			if (job) {
+				classad::Value result;
+				int rval = EvalExprTree( scheduler.slotWeight, scheduler.slotWeightMapAd, job, result );
+
+				if( !rval || !result.IsNumber(job_weight)) {
+					job_weight = 1; // Fall back if it doesn't eval
+				}
+			}
 		}
 	}
 	
@@ -2434,10 +2530,13 @@ int
 count_a_job(JobQueueJob* job, const JOB_ID_KEY& /*jid*/, void*)
 {
 	int		status;
+#if 1  // cache ownerdata pointer in job object
+#else
 	int		niceUser;
 	MyString owner_buf;
 	char const*	owner;
 	MyString domain;
+#endif
 	int		cur_hosts;
 	int		max_hosts;
 	int		universe;
@@ -2448,6 +2547,8 @@ count_a_job(JobQueueJob* job, const JOB_ID_KEY& /*jid*/, void*)
 	if ( job == NULL ) {  
 		return 0;
 	}
+
+	job->ownerdata = NULL; // we will set this later when we fetch the ownerdata
 
 	if (job->LookupInteger(ATTR_JOB_STATUS, status) == 0) {
 		dprintf(D_ALWAYS, "Job has no %s attribute.  Ignoring...\n",
@@ -2501,6 +2602,16 @@ count_a_job(JobQueueJob* job, const JOB_ID_KEY& /*jid*/, void*)
 	}
 	
 
+#if 1 // cache ownerdata pointer in job object
+	// because we set job->ownerdata to NULL above, this will refresh
+	// the job->ownerdata pointer. we do this in case the accounting group
+	// or niceness has been queue-edited or otherwise changed.
+	OwnerData * Owner = scheduler.get_ownerdata(job);
+	if ( ! Owner) {
+		dprintf(D_ALWAYS, "Job has no %s attribute.  Ignoring...\n", ATTR_OWNER);
+		return 0;
+	}
+#else
 	// Sometimes we need the read username owner, not the accounting group
 	MyString real_owner;
 	if( ! job->LookupString(ATTR_OWNER,real_owner) ) {
@@ -2528,6 +2639,7 @@ count_a_job(JobQueueJob* job, const JOB_ID_KEY& /*jid*/, void*)
 		owner_buf.formatstr("%s.%s",NiceUserName, tmp.c_str());
 		owner = owner_buf.Value();
 	}
+#endif
 
 	// increment our count of the number of job ads in the queue
 	scheduler.JobsTotalAds++;
@@ -2582,9 +2694,13 @@ count_a_job(JobQueueJob* job, const JOB_ID_KEY& /*jid*/, void*)
     }
     #undef OTHER
 
+#if 1  // cache ownerdata pointer in job object
+#else
 	// insert owner even if REMOVED or HELD for condor_q -{global|sub}
 	// this function makes its own copies of the memory passed in 
 	OwnerData * Owner = scheduler.insert_owner(owner);
+	job->ownerdata = Owner;
+#endif
 	OwnerCounters * Counters = &Owner->num;
 
 	Counters->Hits += 1;
@@ -2674,10 +2790,15 @@ count_a_job(JobQueueJob* job, const JOB_ID_KEY& /*jid*/, void*)
 			}
 		}
 
+#if 1   // cache ownerdata pointer in job object
+		std::string real_owner, domain;
+		job->LookupString(ATTR_OWNER,real_owner); // we can't get here if the job has no ATTR_OWNER
+		job->LookupString(ATTR_NT_DOMAIN, domain);
+#endif
 		// Don't count HELD jobs that aren't externally (gridmanager) managed
 		// Don't count jobs that the gridmanager has said it's completely
 		// done with.
-		UserIdentity userident(real_owner.Value(),domain.Value(),job);
+		UserIdentity userident(real_owner.c_str(),domain.c_str(),job);
 		if ( ( status != HELD || job_managed != false ) &&
 			 job_managed_done == false ) 
 		{
@@ -2851,6 +2972,43 @@ Scheduler::insert_owner(const char * owner)
 	Owner->name = owner;
 	return Owner;
 }
+
+// lookup (and cache) pointer to the jobs submitter instance data (aka the OwnerData)
+OwnerData *
+Scheduler::get_ownerdata(JobQueueJob * job)
+{
+	if ( ! job) return NULL;
+	if (job->ownerdata) return job->ownerdata;
+
+	// Sometimes we need the read username owner, not the accounting group
+	std::string real_owner;
+	if ( ! job->LookupString(ATTR_OWNER,real_owner) ) {
+		return NULL;
+	}
+	const char *owner = real_owner.c_str();
+
+	// calculate owner for per submittor information.
+	std::string owner_alias;
+	job->LookupString(ATTR_ACCOUNTING_GROUP,owner_alias); // TODDCORE
+	if ( ! owner_alias.empty()) {
+		owner = owner_alias.c_str();
+	}
+
+	// With NiceUsers, the number of owners is
+	// not the same as the number of submittors.  So, we first
+	// check if this job is being submitted by a NiceUser, and
+	// if so, insert it as a new entry in the "Owner" table
+	int niceUser = 0;
+	if (job->LookupInteger(ATTR_NICE_USER, niceUser) && niceUser) {
+		MyString tmp(owner); // use a tmp copy of owner in case it already refers to owner_buf
+		formatstr(owner_alias, "%s.%s", NiceUserName, tmp.c_str());
+		owner = owner_alias.c_str();
+	}
+
+	job->ownerdata = scheduler.insert_owner(owner);
+	return job->ownerdata;
+}
+
 
 void
 Scheduler::remove_unused_owners()
@@ -4386,6 +4544,9 @@ Scheduler::generalJobFilesWorkerThread(void *arg, Stream* s)
 			s->timeout( 10 ); // avoid hanging due to huge timeout
 			refuse(s);
 			s->timeout(old_timeout);
+			if ( xfer_priv == PRIV_USER ) {
+				uninit_user_ids();
+			}
 			return FALSE;
 		}
 		if ( peer_version != NULL ) {
@@ -4398,6 +4559,10 @@ Scheduler::generalJobFilesWorkerThread(void *arg, Stream* s)
 			result = ftrans.DownloadFiles();
 
 			if ( result ) {
+				TemporaryPrivSentry old_priv;
+				if ( xfer_priv == PRIV_USER ) {
+					set_user_priv();
+				}
 				AuditLogJobProxy( *rsock, ad );
 			}
 		} else {
@@ -4869,21 +5034,27 @@ Scheduler::updateGSICred(int cmd, Stream* s)
 		if (proxy_path) free(proxy_path);
 		return FALSE;
 	}
-	free(SpoolSpace);
 	MyString final_proxy_path(proxy_path);
 	MyString temp_proxy_path(final_proxy_path);
 	temp_proxy_path += ".tmp";
 	free(proxy_path);
 
 #ifndef WIN32
-		// Check the ownership of the proxy and switch our priv state
-		// if needed
-	StatInfo si( final_proxy_path.Value() );
-	if ( si.Error() == SINoFile ) {
+		// Check the ownership of the job's spool directory and switch
+		// our priv state if needed.
+		// The permissions on the spool directory may prevent us from
+		// stat'ing the proxy file directly as the wrong user.
+		// CRUFT: Once we remove the option to have the schedd chown
+		//   the job's spool directory (CHOWN_JOB_SPOOL_FILES), this
+		//   check can be removed (the files will always be owned by
+		//   the job owner).
+	StatInfo si( SpoolSpace );
+	if ( si.Error() != SIGood ) {
 		dprintf( D_AUDIT | D_FAILURE, *rsock, "updateGSICred(%d): failed, "
-			 "job %d.%d's proxy doesn't exist\n", 
-			 cmd, jobid.cluster, jobid.proc );
+			"stat of spool dirctory for job %d.%d failed: %d\n",
+			cmd, jobid.cluster, jobid.proc, (int)si.Error() );
 		refuse(s);
+		free(SpoolSpace);
 		return FALSE;
 	}
 	uid_t proxy_uid = si.GetOwner();
@@ -4902,6 +5073,7 @@ Scheduler::updateGSICred(int cmd, Stream* s)
 				 job_owner, jobid.cluster, jobid.proc );
 		free( job_owner );
 		refuse(s);
+		free(SpoolSpace);
 		return FALSE;
 	}
 		// If the uids match, then we need to switch to user priv to
@@ -4914,6 +5086,7 @@ Scheduler::updateGSICred(int cmd, Stream* s)
 					 job_owner );
 			free( job_owner );
 			refuse(s);
+			free(SpoolSpace);
 			return FALSE;
 		}
 		priv = set_user_priv();
@@ -4925,6 +5098,8 @@ Scheduler::updateGSICred(int cmd, Stream* s)
 	free( job_owner );
 	job_owner = NULL;
 #endif
+
+	free(SpoolSpace);
 
 		// Decode the proxy off the wire, and store into the
 		// file temp_proxy_path, which is known to be in the SPOOL dir
@@ -6815,10 +6990,10 @@ Scheduler::claimedStartd( DCMsgCallback *cb ) {
 			// probably could/should be changed to be declared as a static method.
 			// Actually, must pass in owner so FindRunnableJob will find a job.
 
-			sn = new DedicatedScheddNegotiate(0, NULL, match->user, NULL);
+			sn = new DedicatedScheddNegotiate(0, NULL, match->user, match->pool);
 		} else {
 			// Use the DedSched
-			sn = new MainScheddNegotiate(0, NULL, match->user, NULL);
+			sn = new MainScheddNegotiate(0, NULL, match->user, match->pool);
 		}		
 
 			// Setting cluster.proc to -1.-1 should result in the schedd
@@ -7368,13 +7543,15 @@ find_idle_local_jobs( JobQueueJob *job, const JOB_ID_KEY&, void* )
 			}
 		}
 
-		if ( ! requirementsMet ) {
-			char *exp = sPrintExpr( scheddAd, universeExp );
-			if ( exp ) {
-				dprintf( D_FULLDEBUG, "Failed expression '%s'\n", exp );
-				free( exp );
+		if ( ! requirementsMet) {
+			if (IsDebugVerbose(D_ALWAYS)) {
+				char *exp = sPrintExpr( scheddAd, universeExp );
+				if ( exp ) {
+					dprintf( D_FULLDEBUG, "Failed expression '%s'\n", exp );
+					free( exp );
+				}
 			}
-			return ( 0 );
+			return 0;
 		}
 			//
 			// Job Requirements Evaluation
@@ -7400,18 +7577,20 @@ find_idle_local_jobs( JobQueueJob *job, const JOB_ID_KEY&, void* )
 			// If the job's requirements failed up above, we will want to 
 			// print the expression to the user and return
 			//
-		if ( ! requirementsMet ) {
-			char *exp = sPrintExpr( *job, ATTR_REQUIREMENTS );
-			if ( exp ) {
-				dprintf( D_FULLDEBUG, "Failed expression '%s'\n", exp );
-				free( exp );
+		if ( ! requirementsMet) {
+			if (IsDebugVerbose(D_ALWAYS)) {
+				char *exp = sPrintExpr( *job, ATTR_REQUIREMENTS );
+				if ( exp ) {
+					dprintf( D_FULLDEBUG, "Failed expression '%s'\n", exp );
+					free( exp );
+				// This is too verbose.
+				//dprintf(D_FULLDEBUG,"Schedd ad that failed to match:\n");
+				//dPrintAd(D_FULLDEBUG, scheddAd);
+				//dprintf(D_FULLDEBUG,"Job ad that failed to match:\n");
+				//dPrintAd(D_FULLDEBUG, *job);
+				}
 			}
-			// This is too verbose.
-			//dprintf(D_FULLDEBUG,"Schedd ad that failed to match:\n");
-			//dPrintAd(D_FULLDEBUG, scheddAd);
-			//dprintf(D_FULLDEBUG,"Job ad that failed to match:\n");
-			//dPrintAd(D_FULLDEBUG, *job);
-			return ( 0 );
+			return 0;
 		}
 
 			//
@@ -7422,6 +7601,22 @@ find_idle_local_jobs( JobQueueJob *job, const JOB_ID_KEY&, void* )
 					 id.cluster, id.proc );
 			scheduler.start_local_universe_job( &id );
 		} else {
+			// if there is a per-owner scheduler job limit that is smaller than the per-owner job limit
+			if (scheduler.MaxRunningSchedulerJobsPerOwner > 0 &&
+			    scheduler.MaxRunningSchedulerJobsPerOwner < scheduler.MaxJobsPerOwner) {
+				OwnerData * owndat = scheduler.get_ownerdata(job);
+				if (owndat->num.SchedulerJobsRunning >= scheduler.MaxRunningSchedulerJobsPerOwner) {
+					dprintf( D_FULLDEBUG,
+							 "Skipping idle scheduler universe job %d.%d because %s already has %d Scheduler jobs running\n",
+							 id.cluster, id.proc, owndat->Name(), owndat->num.SchedulerJobsRunning );
+					return 0;
+				}
+			} else if (scheduler.MaxRunningSchedulerJobsPerOwner == 0) {
+				dprintf( D_FULLDEBUG,
+						 "Skipping idle scheduler universe job %d.%d because Scheduler Universe is disabled by MaxRunningSchedulerJobsPerOwner==0 \n",
+						 id.cluster, id.proc );
+				return 0;
+			}
 			dprintf( D_FULLDEBUG,
 					 "Found idle scheduler universe job %d.%d\n",
 					 id.cluster, id.proc );
@@ -9010,7 +9205,6 @@ Scheduler::start_sched_universe_job(PROC_ID* job_id)
 	int		pid;
 	StatInfo* filestat;
 	bool is_executable;
-	ClassAd *userJob = NULL;
 	shadow_rec *retval = NULL;
 	Env envobject;
 	MyString env_error_msg;
@@ -9037,7 +9231,7 @@ Scheduler::start_sched_universe_job(PROC_ID* job_id)
 	dprintf( D_FULLDEBUG, "Starting sched universe job %d.%d\n",
 		job_id->cluster, job_id->proc );
 
-	userJob = GetJobAd(job_id->cluster,job_id->proc);
+	JobQueueJob * userJob = GetJobAd(job_id->cluster,job_id->proc);
 	ASSERT(userJob);
 
 	if (GetAttributeString(job_id->cluster, job_id->proc, ATTR_JOB_IWD,
@@ -9396,6 +9590,18 @@ Scheduler::start_sched_universe_job(PROC_ID* job_id)
 		SchedUniverseJobsIdle--;
 	}
 	SchedUniverseJobsRunning++;
+
+	// if we have a per-user scheduler jobs limit.  then also keep the
+	//  per-user count of idle and running scheduler jobs up-to-date
+	if (MaxRunningSchedulerJobsPerOwner >= 0 && MaxRunningSchedulerJobsPerOwner < MaxJobsPerOwner) {
+		OwnerData * owndat = get_ownerdata(userJob);
+		if (owndat) {
+			if (owndat->num.SchedulerJobsIdle > 0) {
+				owndat->num.SchedulerJobsIdle--;
+			}
+			owndat->num.SchedulerJobsRunning++;
+		}
+	}
 
 	retval =  add_shadow_rec( pid, job_id, CONDOR_UNIVERSE_SCHEDULER, NULL, -1 );
 
@@ -11942,6 +12148,7 @@ Scheduler::Init()
 	}
 	free( tmp );
 
+	MaxRunningSchedulerJobsPerOwner = param_integer("MAX_RUNNING_SCHEDULER_JOBS_PER_OWNER", INT_MAX);
 	MaxJobsSubmitted = param_integer("MAX_JOBS_SUBMITTED",INT_MAX);
 	MaxJobsPerOwner = param_integer( "MAX_JOBS_PER_OWNER", INT_MAX );
 	MaxJobsPerSubmission = param_integer( "MAX_JOBS_PER_SUBMISSION", INT_MAX );
@@ -12632,6 +12839,10 @@ Scheduler::Register()
 	daemonCore->Register_CommandWithPayload(QUERY_JOB_ADS, "QUERY_JOB_ADS",
 				(CommandHandlercpp)&Scheduler::command_query_job_ads,
 				"command_query_job_ads", this, READ);
+
+	daemonCore->Register_CommandWithPayload(QUERY_JOB_ADS_WITH_AUTH, "QUERY_JOB_ADS_WITH_AUTH",
+				(CommandHandlercpp)&Scheduler::command_query_job_ads,
+				"command_query_job_ads", this, READ, D_FULLDEBUG, true /*force authentication*/);
 
 	// Note: The QMGMT READ/WRITE commands have the same command handler.
 	// This is ok, because authorization to do write operations is verified
@@ -13761,6 +13972,9 @@ Scheduler::publish( ClassAd *cad ) {
 	cad->Assign( "MaxJobsRunning", MaxJobsRunning );
 	cad->Assign( "MaxJobsSubmitted", MaxJobsSubmitted );
 	cad->Assign( "MaxJobsPerOwner", MaxJobsPerOwner );
+	if (MaxRunningSchedulerJobsPerOwner >= 0 && MaxRunningSchedulerJobsPerOwner < MaxJobsPerOwner) {
+		cad->Assign( "MaxRunningSchedulerJobsPerOwner", MaxRunningSchedulerJobsPerOwner );
+	}
 	cad->Assign( "MaxJobsPerSubmission", MaxJobsPerSubmission );
 	cad->Assign( "JobsStarted", JobsStarted );
 	cad->Assign( "SwapSpace", SwapSpace );

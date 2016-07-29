@@ -217,7 +217,7 @@ typedef HashTable<int, int> ClusterSizeHashTable_t;
 static ClusterSizeHashTable_t *ClusterSizeHashTable = 0;
 static int TotalJobsCount = 0;
 
-static classad::References immutable_attrs, protected_attrs;
+static classad::References immutable_attrs, protected_attrs, secure_attrs;
 static int flush_job_queue_log_timer_id = -1;
 static int dirty_notice_timer_id = -1;
 static int flush_job_queue_log_delay = 0;
@@ -746,6 +746,9 @@ InitQmgmt()
 	protected_attrs.clear();
 	param_and_insert_attrs("PROTECTED_JOB_ATTRS", protected_attrs);
 	param_and_insert_attrs("SYSTEM_PROTECTED_JOB_ATTRS", protected_attrs);
+	secure_attrs.clear();
+	param_and_insert_attrs("SECURE_JOB_ATTRS", secure_attrs);
+	param_and_insert_attrs("SYSTEM_SECURE_JOB_ATTRS", secure_attrs);
 
 	schedd_forker.Initialize();
 	int max_schedd_forkers = param_integer ("SCHEDD_QUERY_WORKERS",8,0);
@@ -2543,6 +2546,22 @@ SetAttribute(int cluster_id, int proc_id, const char *attr_name,
 		return -1;
 	}
 
+	// Ensure user is not changing a secure attribute.  Only schedd is
+	// allowed to do that, via the internal API.
+	if (secure_attrs.find(attr_name) != secure_attrs.end())
+	{
+		errno = EACCES;
+		dprintf(D_ALWAYS,
+				"SetAttribute attempt to edit secure attribute %s in job %d.%d\n",
+				attr_name, cluster_id, proc_id);
+		// should we fail or silently succeed?  (old submits set secure attrs)
+		if(param_boolean("SECURE_JOB_ATTRS_SET_FAIL", true)) {
+			return -1;
+		} else {
+			return 0;
+		}
+	}
+
 	IdToKey(cluster_id,proc_id,key);
 
 	if (JobQueue->Lookup(key, job)) {
@@ -2697,6 +2716,16 @@ SetAttribute(int cluster_id, int proc_id, const char *attr_name,
 				return -1;
 		}
 
+#if !defined(WIN32)
+		uid_t user_uid;
+		if ( can_switch_ids() && !pcache()->get_user_uid( owner, user_uid ) ) {
+			errno = EACCES;
+			dprintf( D_ALWAYS, "SetAttribute security violation: "
+					 "setting owner to %s, which is not a valid user account\n",
+					 attr_value );
+			return -1;
+		}
+#endif
 
 			// If we got this far, we're allowing the given value for
 			// ATTR_OWNER to be set.  However, now, we should try to
@@ -3960,7 +3989,7 @@ dollarDollarExpand(int cluster_id, int proc_id, ClassAd *ad, ClassAd *startd_ad,
 			bool expanded_something = false;
 			int search_pos = 0;
 			while( !attribute_not_found &&
-					find_config_macro(attribute_value,&left,&name,&right,NULL,true,search_pos) )
+					next_dollardollar_macro(attribute_value, search_pos, &left, &name, &right) )
 			{
 				expanded_something = true;
 				

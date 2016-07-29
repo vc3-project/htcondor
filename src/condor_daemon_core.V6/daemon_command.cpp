@@ -314,7 +314,7 @@ DaemonCommandProtocol::CommandProtocolResult DaemonCommandProtocol::AcceptUDPReq
 
 		if (sess_id) {
 			KeyCacheEntry *session = NULL;
-			bool found_sess = m_sec_man->session_cache.lookup(sess_id, session);
+			bool found_sess = m_sec_man->session_cache->lookup(sess_id, session);
 
 			if (!found_sess) {
 				dprintf ( D_ALWAYS, "DC_AUTHENTICATE: session %s NOT FOUND; this session was requested by %s with return address %s\n", sess_id, m_sock->peer_description(), return_address_ss ? return_address_ss : "(none)");
@@ -408,7 +408,7 @@ DaemonCommandProtocol::CommandProtocolResult DaemonCommandProtocol::AcceptUDPReq
 
 		if (sess_id) {
 			KeyCacheEntry *session = NULL;
-			bool found_sess = m_sec_man->session_cache.lookup(sess_id, session);
+			bool found_sess = m_sec_man->session_cache->lookup(sess_id, session);
 
 			if (!found_sess) {
 				dprintf ( D_ALWAYS, "DC_AUTHENTICATE: session %s NOT FOUND; this session was requested by %s with return address %s\n", sess_id, m_sock->peer_description(), return_address_ss ? return_address_ss : "(none)");
@@ -767,7 +767,7 @@ DaemonCommandProtocol::CommandProtocolResult DaemonCommandProtocol::ReadCommand(
 				}
 
 				// lookup the suggested key
-				if (!m_sec_man->session_cache.lookup(m_sid, session)) {
+				if (!m_sec_man->session_cache->lookup(m_sid, session)) {
 
 					// the key id they sent was not in our cache.  this is a
 					// problem.
@@ -859,10 +859,10 @@ DaemonCommandProtocol::CommandProtocolResult DaemonCommandProtocol::ReadCommand(
 			else {
 					// they did not request a cached session.  see if they
 					// want to start one.  look at our security policy.
-				ClassAd our_policy;
+				ClassAd *our_policy;
 				if( ! m_sec_man->FillInSecurityPolicyAdFromCache(
 					m_comTable[m_cmd_index].perm,
-					&our_policy,
+					our_policy,
 					false,
 					false,
 					m_comTable[m_cmd_index].force_authentication ) )
@@ -877,12 +877,12 @@ DaemonCommandProtocol::CommandProtocolResult DaemonCommandProtocol::ReadCommand(
 
 				if (IsDebugVerbose(D_SECURITY)) {
 					dprintf ( D_SECURITY, "DC_AUTHENTICATE: our_policy:\n" );
-					dPrintAd(D_SECURITY, our_policy);
+					dPrintAd(D_SECURITY, *our_policy);
 				}
 
 				// reconcile.  if unable, close socket.
 				m_policy = m_sec_man->ReconcileSecurityPolicyAds( m_auth_info,
-																  our_policy );
+																  *our_policy );
 
 				if (!m_policy) {
 					dprintf(D_ALWAYS, "DC_AUTHENTICATE: Unable to reconcile!\n");
@@ -1323,10 +1323,10 @@ DaemonCommandProtocol::CommandProtocolResult DaemonCommandProtocol::VerifyComman
 			// security policy says, we just allow it.
 			if (m_comTable[m_cmd_index].perm != ALLOW) {
 
-				ClassAd our_policy;
+				ClassAd *our_policy;
 				if( ! m_sec_man->FillInSecurityPolicyAdFromCache(
 					m_comTable[m_cmd_index].perm,
-					&our_policy,
+					our_policy,
 					false,
 					false,
 					m_comTable[m_cmd_index].force_authentication ) )
@@ -1341,13 +1341,13 @@ DaemonCommandProtocol::CommandProtocolResult DaemonCommandProtocol::VerifyComman
 				// or turn on integrity.  check to see if any of those
 				// were required.
 
-				if (  (m_sec_man->sec_lookup_req(our_policy, ATTR_SEC_NEGOTIATION)
+				if (  (m_sec_man->sec_lookup_req(*our_policy, ATTR_SEC_NEGOTIATION)
 					   == SecMan::SEC_REQ_REQUIRED)
-				   || (m_sec_man->sec_lookup_req(our_policy, ATTR_SEC_AUTHENTICATION)
+				   || (m_sec_man->sec_lookup_req(*our_policy, ATTR_SEC_AUTHENTICATION)
 					   == SecMan::SEC_REQ_REQUIRED)
-				   || (m_sec_man->sec_lookup_req(our_policy, ATTR_SEC_ENCRYPTION)
+				   || (m_sec_man->sec_lookup_req(*our_policy, ATTR_SEC_ENCRYPTION)
 					   == SecMan::SEC_REQ_REQUIRED)
-				   || (m_sec_man->sec_lookup_req(our_policy, ATTR_SEC_INTEGRITY)
+				   || (m_sec_man->sec_lookup_req(*our_policy, ATTR_SEC_INTEGRITY)
 					   == SecMan::SEC_REQ_REQUIRED) ) {
 
 					// yep, they were.  deny.
@@ -1567,7 +1567,7 @@ DaemonCommandProtocol::CommandProtocolResult DaemonCommandProtocol::SendResponse
 		// outgoing session to a daemon with that IP and
 		// port as its command socket.
 		KeyCacheEntry tmp_key(m_sid, NULL, m_key, m_policy, expiration_time, session_lease );
-		m_sec_man->session_cache.insert(tmp_key);
+		m_sec_man->session_cache->insert(tmp_key);
 		dprintf (D_SECURITY, "DC_AUTHENTICATE: added incoming session id %s to cache for %i seconds (lease is %ds, return address is %s).\n", m_sid, durint, session_lease, return_addr ? return_addr : "unknown");
 		if (IsDebugVerbose(D_SECURITY)) {
 			dPrintAd(D_SECURITY, *m_policy);

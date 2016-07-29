@@ -83,9 +83,18 @@ public:
 	static const char sec_feat_act_rev[][10];
 	static const char sec_req_rev[][10];
 
-	static KeyCache                      session_cache;
+	// A pointer to the current session cache.
+	static KeyCache                     *session_cache;
+	// The default session cache - used when there are no tags
+	static KeyCache                      m_default_session_cache;
+	// Alternate session caches.
+	static std::map<std::string,KeyCache*> *m_tagged_session_cache;
+        static std::string m_tag;
 	static HashTable<MyString, MyString> command_map;
 	static int sec_man_ref_count;
+
+	// Manage the pool password
+	static std::string m_pool_password;
 
 		// The following is indexed by session index name ( "addr,<cmd>" )
 	static HashTable<MyString, classy_counted_ptr<SecManStartCommand> > tcp_auth_in_progress;
@@ -124,6 +133,20 @@ public:
     void                    invalidateExpiredCache();
 	void					invalidateByParentAndPid(const char * parent, int pid);
 
+	// Setup `tag`ing mechanism - provide a way for a unique set of session caches.
+	// This is useful when CEDAR needs to impersonate several logical users within the
+	// same process but does not want the session cache for user A to be reused by user B.
+	static void setTag(const std::string &);
+        static const std::string &getTag() {return m_tag;}
+
+	// Get and set a pool password - the SecMan controls this as it is a convenient global.
+	// This is useful when a pool password needs to be managed programmatically - and not
+	// read from disk.
+	//
+	// An empty pool password is invalid and indicates one should disable the feature.
+	static void setPoolPassword(const std::string &pool) {m_pool_password = pool;}
+	// An empty pool indicates this is not used.
+	static const std::string &getPoolPassword() {return m_pool_password;}
 
 	bool	FillInSecurityPolicyAd( DCpermission auth_level,
 									ClassAd* ad,
@@ -132,14 +155,14 @@ public:
 									bool force_authentication=false);
 
 	bool	FillInSecurityPolicyAdFromCache( DCpermission auth_level,
-									ClassAd* ad,
+									ClassAd* &ad,
 									bool raw_protocol=false,
 									bool use_tmp_sec_session=false,
 									bool force_authentication=false);
 
-	ClassAd * 				ReconcileSecurityPolicyAds(ClassAd &cli_ad, ClassAd &srv_ad);
+	ClassAd * 				ReconcileSecurityPolicyAds(const ClassAd &cli_ad, const ClassAd &srv_ad);
 	bool 					ReconcileSecurityDependency (sec_req &a, sec_req &b);
-	SecMan::sec_feat_act	ReconcileSecurityAttribute(const char* attr, ClassAd &cli_ad, ClassAd &srv_ad, bool *required = NULL);
+	SecMan::sec_feat_act	ReconcileSecurityAttribute(const char* attr, const ClassAd &cli_ad, const ClassAd &srv_ad, bool *required = NULL);
 	MyString			ReconcileMethodLists( char * cli_methods, char * srv_methods );
 
 
@@ -152,8 +175,8 @@ public:
 	static	MyString 		getDefaultCryptoMethods();
 	static	SecMan::sec_req 		sec_alpha_to_sec_req(char *b);
 	static	SecMan::sec_feat_act 	sec_alpha_to_sec_feat_act(char *b);
-	static	SecMan::sec_req 		sec_lookup_req( ClassAd &ad, const char* pname );
-	static	SecMan::sec_feat_act 	sec_lookup_feat_act( ClassAd &ad, const char* pname );
+	static	SecMan::sec_req 		sec_lookup_req( const ClassAd &ad, const char* pname );
+	static	SecMan::sec_feat_act 	sec_lookup_feat_act( const ClassAd &ad, const char* pname );
 
 		// For each auth level in config hierarchy, look up config value
 		// and return first one found.  Optionally, set param_name to the
@@ -178,9 +201,9 @@ public:
 
 	static	int 			sec_char_to_auth_method( char* method );
 
-	bool 					sec_copy_attribute( ClassAd &dest, ClassAd &source, const char* attr );
+	bool 					sec_copy_attribute( ClassAd &dest, const ClassAd &source, const char* attr );
 
-	bool 					sec_copy_attribute( ClassAd &dest, const char *to_attr, ClassAd &source, const char *from_attr );
+	bool 					sec_copy_attribute( ClassAd &dest, const char *to_attr, const ClassAd &source, const char *from_attr );
 
 	bool		set_parent_unique_id(const char *v);
 	char*		my_parent_unique_id();
@@ -218,6 +241,8 @@ public:
 	bool SetSessionLingerFlag(char const *session_id);
 
  private:
+	void invalidateOneExpiredCache(KeyCache *session_cache);
+
     void                    remove_commands(KeyCacheEntry * keyEntry);
 
 	static char*		_my_unique_id;
