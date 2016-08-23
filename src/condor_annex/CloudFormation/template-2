@@ -326,6 +326,7 @@
 								"sns:ListSubscriptionsByTopic",
 								"sns:DeleteTopic",
 								"sns:Unsubscribe",
+								"sns:GetTopicAttributes",
 								"cloudwatch:DeleteAlarms",
 								"cloudwatch:SetAlarmState",
 								"cloudwatch:GetMetricStatistics",
