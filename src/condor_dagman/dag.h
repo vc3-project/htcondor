@@ -361,6 +361,7 @@ class Dag {
     /** @param whether to include final node, if any, in the count
 	    @return the number of nodes not ready to submit to batch system
 	 */
+    //TEMPTEMP -- should this compare against the size of the ready queue? or have an explicit unready count that we update?
     inline int NumNodesUnready( bool includeFinal ) const {
 				return ( NumNodes( includeFinal )  -
 				( NumNodesDone( includeFinal ) + PreRunNodeCount() +

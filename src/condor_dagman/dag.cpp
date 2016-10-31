@@ -1,3 +1,5 @@
+//TEMPTEMP -- okay, I think part of what I should do here is implement the NodeEnd() business I've been thinking about a lot, to put all of the processing for the end of a node try in one place NodeEnd() or NodeTryEnd()?
+//TEMPTEMP -- for example, RestartNode() should only be called in one place...
 /***************************************************************
  *
  * Copyright (C) 1990-2007, Condor Team, Computer Sciences Department,
@@ -597,6 +599,8 @@ bool Dag::ProcessOneEvent (ULogEventOutcome outcome,
 				break;
               
 			case ULOG_JOB_TERMINATED:
+debug_printf( DEBUG_QUIET, "DIAG 1010 NumJobsSubmitted(): %d\n", NumJobsSubmitted() );//TEMPTEMP
+debug_printf( DEBUG_QUIET, "DIAG 1011 NumNodesReady(): %d\n", NumNodesReady() );//TEMPTEMP
 #if !defined(DISABLE_NODE_TIME_METRICS)
 				job->TermAbortMetrics( event->proc, event->GetEventTime(),
 							_metrics );
@@ -604,6 +608,8 @@ bool Dag::ProcessOneEvent (ULogEventOutcome outcome,
 					// Make sure we don't count finished jobs as idle.
 				ProcessNotIdleEvent( job, event->proc );
 				ProcessTerminatedEvent(event, job, recovery);
+debug_printf( DEBUG_QUIET, "DIAG 1020 NumJobsSubmitted(): %d\n", NumJobsSubmitted() );//TEMPTEMP
+debug_printf( DEBUG_QUIET, "DIAG 1021 NumNodesReady(): %d\n", NumNodesReady() );//TEMPTEMP
 				break;
 
 			case ULOG_POST_SCRIPT_TERMINATED:
@@ -730,7 +736,9 @@ Dag::ProcessTerminatedEvent(const ULogEvent *event, Job *job,
 		bool recovery) {
 	if( job ) {
 
+debug_printf( DEBUG_QUIET, "DIAG 1030 NumJobsSubmitted(): %d\n", NumJobsSubmitted() );//TEMPTEMP
 		DecrementProcCount( job );
+debug_printf( DEBUG_QUIET, "DIAG 1031 NumJobsSubmitted(): %d\n", NumJobsSubmitted() );//TEMPTEMP
 
 		const JobTerminatedEvent * termEvent =
 					(const JobTerminatedEvent*) event;
@@ -738,6 +746,7 @@ Dag::ProcessTerminatedEvent(const ULogEvent *event, Job *job,
 		bool failed = !(termEvent->normal && termEvent->returnValue == 0);
 
 		if( failed ) {
+debug_printf( DEBUG_QUIET, "DIAG 1032 NumJobsSubmitted(): %d\n", NumJobsSubmitted() );//TEMPTEMP
 				// job failed or was killed by a signal
 
 			if( termEvent->normal ) {
@@ -784,8 +793,10 @@ Dag::ProcessTerminatedEvent(const ULogEvent *event, Job *job,
 					RemoveBatchJob( job );
 				}
 			}
+debug_printf( DEBUG_QUIET, "DIAG 1033 NumJobsSubmitted(): %d\n", NumJobsSubmitted() );//TEMPTEMP
 
 		} else {
+debug_printf( DEBUG_QUIET, "DIAG 1034 NumJobsSubmitted(): %d\n", NumJobsSubmitted() );//TEMPTEMP
 			// job succeeded
 			ASSERT( termEvent->returnValue == 0 );
 
@@ -808,9 +819,11 @@ Dag::ProcessTerminatedEvent(const ULogEvent *event, Job *job,
 							"successfully.\n", job->GetJobName(),
 							termEvent->cluster, termEvent->proc,
 							termEvent->subproc );
+debug_printf( DEBUG_QUIET, "DIAG 1035 NumJobsSubmitted(): %d\n", NumJobsSubmitted() );//TEMPTEMP
 		}
 
 		ProcessJobProcEnd( job, recovery, failed );
+debug_printf( DEBUG_QUIET, "DIAG 1040 NumJobsSubmitted(): %d\n", NumJobsSubmitted() );//TEMPTEMP
 
 		if( job->_scriptPost == NULL ) {
 			bool abort = CheckForDagAbort(job, "job");
@@ -829,6 +842,15 @@ Dag::ProcessTerminatedEvent(const ULogEvent *event, Job *job,
 //---------------------------------------------------------------------------
 void
 Dag::RemoveBatchJob(Job *node) {
+debug_printf( DEBUG_QUIET, "DIAG Dag::RemoveBatchJob(%s)\n", node->GetJobName() );//TEMPTEMP
+
+//TEMPTEMP>>>
+//Note:  this is really kludgey -- just doing it as a test...
+	if ( node->_queuedNodeJobProcs > 0 ) {
+		UpdateJobCounts( node, -1 );
+		node->Cleanup();
+	}
+//<<<TEMPTEMP
 
 	ArgList args;
 	MyString constraint;
@@ -4127,9 +4149,12 @@ Dag::ProcessFailedSubmit( Job *node, int max_submit_attempts )
 void
 Dag::DecrementProcCount( Job *node )
 {
+debug_printf( DEBUG_QUIET, "DIAG 1110 Dag::DecrementProcCount(%s)\n", node->GetJobName() );//TEMPTEMP
 	node->_queuedNodeJobProcs--;
 	ASSERT( node->_queuedNodeJobProcs >= 0 );
+debug_printf( DEBUG_QUIET, "DIAG 1111 _queuedNodeJobProcs: %d\n", node->_queuedNodeJobProcs );//TEMPTEMP
 
+	//TEMPTEMP -- maybe always decrement the job count the *first* time we're called for a given node... (kind of kludgey, though -- probably the right thing to do is to decrement the job count when we remove the other procs)
 	if( node->_queuedNodeJobProcs == 0 ) {
 		UpdateJobCounts( node, -1 );
 		node->Cleanup();

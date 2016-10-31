@@ -1517,6 +1517,13 @@ print_status() {
 					ready, failed, unready, dagman.dag->_dagStatus,
 					dagman.dag->Recovery() );
 	}
+
+//TEMPTEMP>>>
+	if ( unready < 0 ) {
+		debug_printf( DEBUG_QUIET, "ERROR:  illegal unready count: %d\n", unready );
+		main_shutdown_rescue( EXIT_ERROR, Dag::DAG_STATUS_ERROR );
+	}
+//<<<TEMPTEMP
 }
 
 void condor_event_timer () {
