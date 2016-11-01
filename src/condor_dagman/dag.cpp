@@ -1512,6 +1512,200 @@ Dag::StartFinalNode()
 	return false;
 }
 
+//TEMPTEMP -- maybe NodeTryFinished?
+//-------------------------------------------------------------------------
+void
+Dag::NodeTryEnd( Job *node, bool failed, bool recovery )
+{
+	debug_printf( DEBUG_QUIET, "DIAG Dag::NodeTryEnd(%s)\n", node->GetJobName() );//TEMPTEMP?
+
+	if ( failed ) {
+		if ( node->DoRetry() ) {
+			RestartNode( node, recovery );
+		} else {
+				// no more retries -- job failed
+			if( node->GetRetryMax() > 0 ) {
+					// add # of retries to error_text
+				node->error_text.formatstr_cat( " (after %d node retries)",
+						node->GetRetries() );
+			}
+			
+			//TEMPTEMP -- is this the right place to do this?
+			if ( node->_queuedNodeJobProcs == 0 ) {
+				_numNodesFailed++;
+				_metrics->NodeFinished( node->GetDagFile() != NULL, false );
+				if ( _dagStatus == DAG_STATUS_OK ) {
+					_dagStatus = DAG_STATUS_NODE_FAILED;
+				}
+			}
+		}
+	} else {
+		TerminateJob( node, recovery );
+	}
+
+#if 0
+//TEMPTEMP junk1
+	if ( failed && job->_scriptPost == NULL ) {
+		if ( job->DoRetry() ) {
+			RestartNode( job, recovery );
+		} else {
+				// no more retries -- job failed
+			if( job->GetRetryMax() > 0 ) {
+					// add # of retries to error_text
+				job->error_text.formatstr_cat( " (after %d node retries)",
+						job->GetRetries() );
+			}
+			if ( job->_queuedNodeJobProcs == 0 ) {
+				_numNodesFailed++;
+				_metrics->NodeFinished( job->GetDagFile() != NULL, false );
+				if ( _dagStatus == DAG_STATUS_OK ) {
+					_dagStatus = DAG_STATUS_NODE_FAILED;
+				}
+			}
+		}
+		return;
+	}
+
+	if ( job->_queuedNodeJobProcs == 0 ) {
+			// All procs for this job are done.
+		debug_printf( DEBUG_NORMAL, "Node %s job completed\n",
+				job->GetJobName() );
+
+			// if a POST script is specified for the job, run it
+		if(job->_scriptPost != NULL) {
+			if ( recovery ) {
+				job->SetStatus( Job::STATUS_POSTRUN );
+				_postRunNodeCount++;
+			} else {
+				(void)RunPostScript( job, _alwaysRunPost, 0 );
+			}
+		} else if( job->GetStatus() != Job::STATUS_ERROR ) {
+			// no POST script was specified, so update DAG with
+			// node's successful completion if the node succeeded.
+			TerminateJob( job, recovery );
+		}
+	}
+
+//TEMPTEMP junk2
+		if( !(termEvent->normal && termEvent->returnValue == 0) ) {
+				// POST script failed or was killed by a signal
+			job->TerminateFailure();
+
+			int mainJobRetval = job->retval;
+
+			MyString errStr;
+
+			if( termEvent->normal ) {
+					// Normal termination -- POST script failed
+				errStr.formatstr( "failed with status %d",
+							termEvent->returnValue );
+				debug_printf( DEBUG_NORMAL, "%s%s\n", header.Value(),
+							errStr.Value() );
+				debug_printf( DEBUG_QUIET,
+					"POST for Node %s returned %d\n",
+					job->GetJobName(),termEvent->returnValue);
+
+				job->retval = termEvent->returnValue;
+			} else {
+					// Abnormal termination -- POST script killed by signal
+				errStr.formatstr( "died on signal %d",
+							termEvent->signalNumber );
+				debug_printf( DEBUG_NORMAL,
+							"%s%s\n", header.Value(), errStr.Value() );
+
+				job->retval = (0 - termEvent->signalNumber);
+			}
+
+			job->error_text.formatstr(
+						"POST script %s", errStr.Value() );
+
+				// Log post script success or failure if necessary.
+			_jobstateLog.WriteScriptSuccessOrFailure( job, true );
+
+				//
+				// Deal with retries.
+				//
+			if ( job->DoRetry() ) {
+				RestartNode( job, recovery );
+			} else {
+					// no more retries -- node failed
+				_numNodesFailed++;
+				_metrics->NodeFinished( job->GetDagFile() != NULL, false );
+				if ( _dagStatus == DAG_STATUS_OK ) {
+					_dagStatus = DAG_STATUS_NODE_FAILED;
+				}
+
+				if( mainJobRetval > 0 ) {
+					job->error_text.formatstr( "Job exited with status %d and ",
+								mainJobRetval );
+				}
+				else if( mainJobRetval < 0  &&
+							mainJobRetval >= -MAX_SIGNAL ) {
+					job->error_text.formatstr( "Job died on signal %d and ",
+								0 - mainJobRetval );
+				}
+				else {
+					job->error_text.formatstr( "Job failed due to DAGMAN error %d and ",
+								mainJobRetval );
+				}
+
+				if ( termEvent->normal ) {
+					job->error_text.formatstr_cat( "POST Script failed with status %d",
+								termEvent->returnValue );
+				} else {
+					job->error_text.formatstr_cat( "POST Script died on signal %d",
+								termEvent->signalNumber );
+				}
+
+				if ( job->GetRetryMax() > 0 ) {
+						// add # of retries to error_text
+					job->error_text.formatstr_cat( " (after %d node retries)",
+							job->GetRetries() );
+				}
+			}
+
+		} else {
+				// POST script succeeded.
+			ASSERT( termEvent->returnValue == 0 );
+			debug_printf( DEBUG_NORMAL,
+						"%scompleted successfully.\n", header.Value() );
+			job->retval = 0;
+				// Log post script success or failure if necessary.
+			_jobstateLog.WriteScriptSuccessOrFailure( job, true );
+			TerminateJob( job, recovery );
+		}
+
+		bool abort = CheckForDagAbort(job, "POST script");
+		// if dag abort happened, we never return here!
+		if( abort ) {
+			return;
+		}
+
+//TEMPTEMP junk3
+		else if ( job->DoRetry() ) {
+			job->TerminateFailure();
+			// Note: don't update count in metrics here because we're
+			// retrying!
+			RestartNode( job, false );
+		}
+
+			// None of the above apply -- the node has failed.
+		else {
+			job->TerminateFailure();
+			_numNodesFailed++;
+			_metrics->NodeFinished( job->GetDagFile() != NULL, false );
+			if ( _dagStatus == DAG_STATUS_OK ) {
+				_dagStatus = DAG_STATUS_NODE_FAILED;
+			}
+			if ( job->GetRetryMax() > 0 ) {
+					// add # of retries to error_text
+				job->error_text.formatstr_cat( " (after %d node retries)",
+						job->GetRetries() );
+			}
+		}
+#endif
+}
+
 //-------------------------------------------------------------------------
 // returns number of jobs submitted
 int
@@ -2395,6 +2589,7 @@ Dag::WriteScriptToRescue( FILE *fp, Script *script )
 // Private Methods
 //===========================================================================
 
+//TEMPTEMP -- this should probably be TerminateJobSuccess(), and there should probably be a corresponding TerminateJobFailure()
 //-------------------------------------------------------------------------
 void
 Dag::TerminateJob( Job* job, bool recovery, bool bootstrap )

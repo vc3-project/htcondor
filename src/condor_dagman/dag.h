@@ -205,6 +205,7 @@ class Dag {
 			function).
 		@return True if the DAG should continue, false if we should abort.
 	*/
+	//TEMPTEMP -- should this (and a bunch of other methods) be private?
 	bool ProcessOneEvent (ULogEventOutcome outcome, const ULogEvent *event,
 			bool recovery, bool &done);
 
@@ -842,6 +843,10 @@ class Dag {
 	   @return true on success, false on failure
     */
     bool StartNode( Job *node, bool isRetry );
+
+	//TEMPTEMP -- document
+	//TEMPTEMP -- have different ones for success and failure?
+	void NodeTryEnd( Job *node, bool failed, bool recovery );
 
     /* A helper function to run the POST script, if one exists.
            @param The job owning the POST script
