@@ -845,7 +845,6 @@ class Dag {
     bool StartNode( Job *node, bool isRetry );
 
 	//TEMPTEMP -- document
-	//TEMPTEMP -- have different ones for success and failure?
 	void NodeTryEnd( Job *node, bool failed, bool recovery );
 
     /* A helper function to run the POST script, if one exists.

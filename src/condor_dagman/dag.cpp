@@ -844,13 +844,13 @@ void
 Dag::RemoveBatchJob(Job *node) {
 debug_printf( DEBUG_QUIET, "DIAG Dag::RemoveBatchJob(%s)\n", node->GetJobName() );//TEMPTEMP
 
-//TEMPTEMP>>>
+#if 0 //TEMPTEMP>>>
 //Note:  this is really kludgey -- just doing it as a test...
 	if ( node->_queuedNodeJobProcs > 0 ) {
 		UpdateJobCounts( node, -1 );
 		node->Cleanup();
 	}
-//<<<TEMPTEMP
+#endif //<<<TEMPTEMP
 
 	ArgList args;
 	MyString constraint;
@@ -899,6 +899,10 @@ Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
 	//
 
 	if ( failed && job->_scriptPost == NULL ) {
+		//TEMPTEMP -- call NodeTryEnd() here
+#if 1 //TEMPTEMP
+		NodeTryEnd( job, true, recovery );
+#else //TEMPTEMP
 		if ( job->DoRetry() ) {
 			RestartNode( job, recovery );
 		} else {
@@ -916,6 +920,7 @@ Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
 				}
 			}
 		}
+#endif //TEMPTEMP
 		return;
 	}
 
@@ -935,6 +940,7 @@ Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
 		} else if( job->GetStatus() != Job::STATUS_ERROR ) {
 			// no POST script was specified, so update DAG with
 			// node's successful completion if the node succeeded.
+			//TEMPTEMP -- call NodeTryEnd() here
 			TerminateJob( job, recovery );
 		}
 	}
@@ -1006,6 +1012,7 @@ Dag::ProcessPostTermEvent(const ULogEvent *event, Job *job,
 				//
 				// Deal with retries.
 				//
+			//TEMPTEMP -- call NodeTryEnd() here?
 			if ( job->DoRetry() ) {
 				RestartNode( job, recovery );
 			} else {
@@ -1521,23 +1528,25 @@ Dag::NodeTryEnd( Job *node, bool failed, bool recovery )
 
 	if ( failed ) {
 		if ( node->DoRetry() ) {
+				//TEMPTEMP -- is node->TerminateFailure() necessary?  We do that in PreScriptReaper but not other places...
+			//TEMPTEMP? node->TerminateFailure();
 			RestartNode( node, recovery );
 		} else {
 				// no more retries -- job failed
-			if( node->GetRetryMax() > 0 ) {
+			if ( node->GetRetryMax() > 0 ) {
 					// add # of retries to error_text
 				node->error_text.formatstr_cat( " (after %d node retries)",
 						node->GetRetries() );
 			}
 			
 			//TEMPTEMP -- is this the right place to do this?
-			if ( node->_queuedNodeJobProcs == 0 ) {
-				_numNodesFailed++;
-				_metrics->NodeFinished( node->GetDagFile() != NULL, false );
-				if ( _dagStatus == DAG_STATUS_OK ) {
-					_dagStatus = DAG_STATUS_NODE_FAILED;
-				}
+			_numNodesFailed++;
+			_metrics->NodeFinished( node->GetDagFile() != NULL, false );
+			if ( _dagStatus == DAG_STATUS_OK ) {
+				_dagStatus = DAG_STATUS_NODE_FAILED;
 			}
+
+			node->TerminateFailure();
 		}
 	} else {
 		TerminateJob( node, recovery );
@@ -1545,51 +1554,9 @@ Dag::NodeTryEnd( Job *node, bool failed, bool recovery )
 
 #if 0
 //TEMPTEMP junk1
-	if ( failed && job->_scriptPost == NULL ) {
-		if ( job->DoRetry() ) {
-			RestartNode( job, recovery );
-		} else {
-				// no more retries -- job failed
-			if( job->GetRetryMax() > 0 ) {
-					// add # of retries to error_text
-				job->error_text.formatstr_cat( " (after %d node retries)",
-						job->GetRetries() );
-			}
-			if ( job->_queuedNodeJobProcs == 0 ) {
-				_numNodesFailed++;
-				_metrics->NodeFinished( job->GetDagFile() != NULL, false );
-				if ( _dagStatus == DAG_STATUS_OK ) {
-					_dagStatus = DAG_STATUS_NODE_FAILED;
-				}
-			}
-		}
-		return;
-	}
-
-	if ( job->_queuedNodeJobProcs == 0 ) {
-			// All procs for this job are done.
-		debug_printf( DEBUG_NORMAL, "Node %s job completed\n",
-				job->GetJobName() );
-
-			// if a POST script is specified for the job, run it
-		if(job->_scriptPost != NULL) {
-			if ( recovery ) {
-				job->SetStatus( Job::STATUS_POSTRUN );
-				_postRunNodeCount++;
-			} else {
-				(void)RunPostScript( job, _alwaysRunPost, 0 );
-			}
-		} else if( job->GetStatus() != Job::STATUS_ERROR ) {
-			// no POST script was specified, so update DAG with
-			// node's successful completion if the node succeeded.
-			TerminateJob( job, recovery );
-		}
-	}
-
 //TEMPTEMP junk2
 		if( !(termEvent->normal && termEvent->returnValue == 0) ) {
 				// POST script failed or was killed by a signal
-			job->TerminateFailure();
 
 			int mainJobRetval = job->retval;
 
@@ -1930,6 +1897,8 @@ Dag::PreScriptReaper( Job *job, int status )
 			job->_scriptPost->_retValJob = DAG_ERROR_JOB_SKIPPED;
 			RunPostScript( job, _alwaysRunPost, job->retval );
 		}
+
+		//TEMPTEMP -- call NodeTryEnd() here?
 
 			// Check for retries.
 		else if ( job->DoRetry() ) {
