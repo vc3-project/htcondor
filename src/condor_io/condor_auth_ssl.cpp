@@ -131,7 +131,6 @@ bool Condor_Auth_SSL::Initialize()
 		 !(SSL_library_init_ptr = (int (*)())dlsym(dl_hdl, "SSL_library_init")) ||
 		 !(SSL_load_error_strings_ptr = (void (*)())dlsym(dl_hdl, "SSL_load_error_strings")) ||
 #else
-static int (*OPENSSL_init_ssl_ptr)(uint64_t, const OPENSSL_INIT_SETTINGS *) = NULL;
 		 !(OPENSSL_init_ssl_ptr = (int (*)())dlsym(dl_hdl, "OPENSSL_init_ssl")) ||
 #endif
 		 !(SSL_new_ptr = (SSL *(*)(SSL_CTX *))dlsym(dl_hdl, "SSL_new")) ||
