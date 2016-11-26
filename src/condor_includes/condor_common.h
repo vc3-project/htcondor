@@ -27,6 +27,9 @@
 #if HAVE_CONFIG_H
 #include "config.h"
 #endif
+#if HAVE_EXT_OPENSSL
+#define OPENSSL_API_COMPAT 0x10000000L
+#endif
 
 /**********************************************************************
 ** Special macros and things we always want our header files to have
