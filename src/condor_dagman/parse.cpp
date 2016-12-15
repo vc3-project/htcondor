@@ -95,6 +95,7 @@ static bool parse_connect( Dag  *dag, const char *filename, int  lineNumber );
 static bool parse_pin_in_out( Dag  *dag, const char *filename,
 			int  lineNumber, bool isPinIn );
 static bool parse_include( Dag  *dag, const char *filename, int  lineNumber );
+static bool parse_provision( Dag  *dag, const char *filename, int  lineNumber );
 static MyString munge_job_name(const char *jobName);
 
 static MyString current_splice_scope(void);
@@ -280,6 +281,7 @@ bool parse(Dag *dag, const char *filename, bool useDagDir,
 		}
 	}
 
+//TEMPTEMP -- hmm -- should INCLUDEs be parsed in the first pass?
 	//
 	// PASS 2.
 	// Seek back to the beginning of the DAG file.
@@ -488,6 +490,12 @@ bool parse(Dag *dag, const char *filename, bool useDagDir,
 						filename, lineNumber );
 		}
 
+		// Handle a PROVISION spec
+		else if(strcasecmp(token, "PROVISION") == 0) {
+			parsed_line_successfully = parse_provision( dag,
+						filename, lineNumber );
+		}
+
 		// None of the above means that there was bad input.
 		else {
 			debug_printf( DEBUG_QUIET, "%s (line %d): "
@@ -495,7 +503,8 @@ bool parse(Dag *dag, const char *filename, bool useDagDir,
 				"RETRY, ABORT-DAG-ON, DOT, VARS, PRIORITY, CATEGORY, "
 				"MAXJOBS, CONFIG, SET_JOB_ATTR, SPLICE, FINAL, "
 				"NODE_STATUS_FILE, REJECT, JOBSTATE_LOG, PRE_SKIP, DONE, "
-				"CONNECT, PIN_IN, PIN_OUT, or INCLUDE token (found %s)\n",
+				"CONNECT, PIN_IN, PIN_OUT, INCLUDE, or PROVISION "
+				"token (found %s)\n",
 				filename, lineNumber, token );
 			parsed_line_successfully = false;
 		}
@@ -2281,7 +2290,7 @@ parse_connect(
 		return false;
 	}
 
-	if ( !Dag::ConnectSplices( parentSplice, childSplice ) ) {
+	if ( !dag->ConnectSplices( parentSplice, childSplice ) ) {
 		debug_printf( DEBUG_QUIET,
 					  "ERROR: %s (line %d): (see previous line)\n",
 					  filename, lineNumber );
@@ -2410,6 +2419,60 @@ parse_include(
 	return parse( dag, tmpFilename.Value(), false, false );
 }
 
+
+//-----------------------------------------------------------------------------
+// 
+// Function: parse_provision
+// Purpose:  Parse a line of the format "PROVISION <nodename>"
+// 
+//-----------------------------------------------------------------------------
+static bool 
+parse_provision(
+	Dag  *dag, 
+	const char *filename, 
+	int  lineNumber )
+{
+	const char *example = "PROVISION <JobName>";
+
+	const char *nodeNameOrig = strtok( NULL, DELIMITERS );
+	if ( nodeNameOrig == NULL ) {
+		debug_printf( DEBUG_QUIET,
+					  "ERROR: %s (line %d): no node name specified\n",
+					  filename, lineNumber );
+		exampleSyntax( example );
+		return false;
+	}
+
+	//
+	// Check for illegal extra tokens.
+	//
+	char *extraTok = strtok( NULL, DELIMITERS );
+	if ( extraTok != NULL ) {
+		debug_printf( DEBUG_QUIET,
+					  "ERROR: %s (line %d): Extra token (%s) on PROVSION line\n",
+					  filename, lineNumber, extraTok );
+		exampleSyntax( example );
+		return false;
+	}
+
+	MyString nodeName = munge_job_name( nodeNameOrig );
+	Job *node = dag->FindNodeByName( nodeName.Value() );
+	if ( node == NULL ) {
+		debug_printf( DEBUG_QUIET, 
+				  "ERROR: %s (line %d): Unknown Job %s\n",
+				  filename, lineNumber, nodeNameOrig );
+		return false;
+	}
+
+
+	//TEMPTEMP -- for now, make sure we don't allow multiple provisioning nodes
+
+	//TEMPTEMP -- call a DAG method to set provisioning node
+
+	return dag->SetProvisioningNode( node );
+}
+
+//-----------------------------------------------------------------------------
 static MyString munge_job_name(const char *jobName)
 {
 		//

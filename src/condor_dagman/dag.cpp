@@ -212,6 +212,8 @@ Dag::Dag( /* const */ StringList &dagFiles,
 
 	_allNodesIt = NULL;
 
+	_provisioningNode = NULL;
+
 	return;
 }
 
@@ -375,6 +377,14 @@ Dag::AddDependency( Job* parent, Job* child )
 	}
 	debug_printf( DEBUG_DEBUG_2, "Dag::AddDependency(%s, %s)\n",
 				parent->GetJobName(), child->GetJobName());
+
+	if ( parent == _provisioningNode || child == _provisioningNode ) {
+		debug_printf( DEBUG_QUIET,
+					"ERROR:  attempting to add dependency to provisioning node %s\n",
+					_provisioningNode->GetJobName() );
+		return false;
+	}
+
 	if( !parent->AddChild( child ) ) {
 		return false;
 	}
@@ -4393,6 +4403,30 @@ Dag::DeletePinList( PinList &pinList )
 		PinNodes *pn = pinList[pinNum];
 		delete pn;
 	}
+}
+
+//---------------------------------------------------------------------------
+bool
+Dag::SetProvisioningNode( Job *node )
+{
+	if ( _provisioningNode != NULL && _provisioningNode != node ) {
+		debug_printf( DEBUG_QUIET,
+					"ERROR:  Attempting to set provisioning node to %s, but it is already set to %s\n",
+					node->GetJobName(), _provisioningNode->GetJobName() );
+
+		return false;
+	}
+
+	if ( node->NumParents() + node->NumChildren() > 0 ) {
+		debug_printf( DEBUG_QUIET,
+					"ERROR:  attempting to set node %s as a provisioning node; this node has dependencies\n",
+					node->GetJobName() );
+		return false;
+	}
+
+	_provisioningNode = node;
+
+	return true;
 }
 
 //---------------------------------------------------------------------------

@@ -175,7 +175,7 @@ class Dag {
         @param child The child job (depends on the parent)
         @return true: successful, false: failure
     */
-    static bool AddDependency (Job * parent, Job * child);
+    bool AddDependency (Job * parent, Job * child);
 
 	/** Run waiting/deferred scripts that are ready to run.  Note: scripts
 	    are also limited by halt status and maxpre/maxpost.
@@ -741,8 +741,11 @@ class Dag {
 		@param childSplice: the splice connected via its pin ins
 		@return: true on success, false otherwise
 	*/
-	static bool ConnectSplices( Dag *parentSplice, Dag *childSplice );
+	bool ConnectSplices( Dag *parentSplice, Dag *childSplice );
 	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+		//TEMPTEMP -- document
+	bool SetProvisioningNode( Job* node );
 
 	/** Set the maximum number of job holds before a node is declared
 		a failure.
@@ -1303,6 +1306,9 @@ private:
 	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 		// Iterator for ALL_NODES implementation.
 	mutable ListIterator<Job> *_allNodesIt;
+
+		//TEMPTEMP -- document
+	Job *_provisioningNode;
 };
 
 #endif /* #ifndef DAG_H */

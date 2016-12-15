@@ -125,6 +125,7 @@ class Job {
 	// WARNING!  status_t and status_t_names must be kept in sync!!
 	// WARNING!  Don't change the values of existing enums -- the
 	// node status file relies on the values staying the same.
+//TEMPTEMP -- clarify things here -- I think status is STATUS_READY even if we're waiting for parents...
     enum status_t {
 		/** Job is not ready (for final) */ STATUS_NOT_READY = 0,
         /** Job is ready for submission */ STATUS_READY = 1,
