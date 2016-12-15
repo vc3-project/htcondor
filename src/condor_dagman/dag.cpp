@@ -4431,6 +4431,70 @@ Dag::SetProvisioningNode( Job *node )
 
 //---------------------------------------------------------------------------
 void
+Dag::ProvisionHold()
+{
+#if 0 //TEMPTEMP
+	for each node
+		if status_ready & !prov & !final
+			status_not_ready
+
+	remove from ready queue
+#endif //TEMPTEMP
+
+	if ( !_provisioningNode) {
+		return;
+	}
+
+    Job * node;
+    ListIterator<Job> iList (_jobs);
+    while ( ( node = iList.Next() ) != NULL ) {
+			//TEMPTEMP -- is this the right thing for final nodes?
+		if ( ( node != _provisioningNode ) && ( node != _final_job ) &&
+					( node->GetStatus() == Job::STATUS_READY ) ) {
+			node->SetStatus( Job::STATUS_NOT_READY );
+		}
+    }
+
+	_readyQ->Rewind();
+	while ( _readyQ->Next( node ) ) {
+		if ( !( node == _final_job ) && !( node == _provisioningNode ) ) {
+			_readyQ->DeleteCurrent();
+		}
+	}
+}
+
+//---------------------------------------------------------------------------
+void
+Dag::ProvisionGo()
+{
+#if 0 //TEMPTEMP
+	for each node
+		if status_not_ready & !prov & !final
+			status_ready
+			add to ready queue?
+#endif //TEMPTEMP
+
+	if ( !_provisioningNode) {
+		return;
+	}
+
+    Job * node;
+    ListIterator<Job> iList (_jobs);
+    while ( ( node = iList.Next() ) != NULL ) {
+			//TEMPTEMP -- is this the right thing for final nodes?
+		if ( ( node != _provisioningNode ) && ( node != _final_job ) &&
+					( node->GetStatus() == Job::STATUS_NOT_READY ) ) {
+			node->SetStatus( Job::STATUS_READY );
+
+			if ( node->NumParents() <= 0 ) {
+				_readyQ->Append( node, -node->_effectivePriority );
+			}
+		}
+    }
+}
+
+//---------------------------------------------------------------------------
+void
 Dag::PrefixAllNodeNames(const MyString &prefix)
 {
 	Job *job = NULL;

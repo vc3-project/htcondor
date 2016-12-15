@@ -1188,6 +1188,9 @@ void main_init (int argc, char ** const argv) {
 					 	dagFile );
     	}
 	}
+		//TEMPTEMP -- is this the right place to do this?
+	dagman.dag->ProvisionHold();
+
 	if( dagman.dag->GetDagPriority() != 0 ) {
 		dagman.dag->SetNodePriorities(); // Applies to the nodes of the dag
 	}

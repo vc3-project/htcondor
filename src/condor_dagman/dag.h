@@ -747,6 +747,12 @@ class Dag {
 		//TEMPTEMP -- document
 	bool SetProvisioningNode( Job* node );
 
+		//TEMPTEMP -- document; should this be private?
+	void ProvisionHold();
+
+		//TEMPTEMP -- document; should this be private?
+	void ProvisionGo();
+
 	/** Set the maximum number of job holds before a node is declared
 		a failure.
 		@param the maximum number of job holds before failure
