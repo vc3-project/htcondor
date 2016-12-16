@@ -1,0 +1,14 @@
+job NodeB job_dagman_prov-A-node.sub
+vars NodeB stime="30"
+# This node should not get submitted, because the provisioning
+# node should exit before NodeB finishes.
+job NodeC job_dagman_prov-A-node.sub
+vars NodeC stime="20"
+parent NodeB child NodeC
+
+# Put this at the back so it would normally get submitted
+# after NodeB.  This node should get removed after
+# NodeB and NodeC finish.
+job NodeA job_dagman_prov-A-node.sub
+vars NodeA stime="20"
+provision NodeA

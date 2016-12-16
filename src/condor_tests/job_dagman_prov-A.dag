@@ -1,0 +1,12 @@
+job NodeB job_dagman_prov-A-node.sub
+vars NodeB stime="20"
+job NodeC job_dagman_prov-A-node.sub
+vars NodeC stime="20"
+parent NodeB child NodeC
+
+# Put this at the back so it would normally get submitted
+# after NodeB.  This node should get removed after
+# NodeB and NodeC finish.
+job NodeA job_dagman_prov-A-node.sub
+vars NodeA stime="100"
+provision NodeA

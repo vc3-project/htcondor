@@ -730,6 +730,11 @@ Dag::ProcessAbortEvent(const ULogEvent *event, Job *job,
 			}
 		}
 
+			//TEMPTEMP -- not sure if this is the right place for this...
+		if ( job == _provisioningNode ) {
+			ProvisionHold();
+		}
+
 		ProcessJobProcEnd( job, recovery, true );
 	}
 }
@@ -818,6 +823,11 @@ Dag::ProcessTerminatedEvent(const ULogEvent *event, Job *job,
 							"successfully.\n", job->GetJobName(),
 							termEvent->cluster, termEvent->proc,
 							termEvent->subproc );
+		}
+
+			//TEMPTEMP -- not sure if this is the right place for this...
+		if ( job == _provisioningNode ) {
+			ProvisionHold();
 		}
 
 		ProcessJobProcEnd( job, recovery, failed );
@@ -1149,6 +1159,11 @@ Dag::ProcessSubmitEvent(Job *job, bool recovery, bool &submitEventIsSane) {
 		}
 	}
 
+		//TEMPTEMP -- not sure if this is the right place for this...
+	if ( job == _provisioningNode ) {
+		ProvisionGo();
+	}
+
 	PrintReadyQ( DEBUG_DEBUG_2 );
 }
 
@@ -1242,6 +1257,11 @@ Dag::ProcessHeldEvent(Job *job, const ULogEvent *event) {
 			RemoveBatchJob( job );
 		}
 	}
+
+		//TEMPTEMP -- not sure if this is the right place for this...
+	if ( job == _provisioningNode ) {
+		ProvisionHold();
+	}
 }
 
 //---------------------------------------------------------------------------
@@ -1254,6 +1274,11 @@ Dag::ProcessReleasedEvent(Job *job,const ULogEvent* event) {
 	}
 	if( job->Release( event->proc ) ) {
 		_numHeldJobProcs--;
+	}
+
+		//TEMPTEMP -- not sure if this is the right place for this...
+	if ( job == _provisioningNode ) {
+		ProvisionGo();
 	}
 }
 
@@ -4445,6 +4470,9 @@ Dag::ProvisionHold()
 		return;
 	}
 
+	debug_printf( DEBUG_NORMAL,
+				"Dag::ProvisionHold(): nodes needing provisioning node must waitto be submitted\n" );
+
     Job * node;
     ListIterator<Job> iList (_jobs);
     while ( ( node = iList.Next() ) != NULL ) {
@@ -4477,6 +4505,9 @@ Dag::ProvisionGo()
 	if ( !_provisioningNode) {
 		return;
 	}
+
+	debug_printf( DEBUG_NORMAL,
+				"Dag::ProvisionGo(): nodes needing provisioning node can be submitted\n" );
 
     Job * node;
     ListIterator<Job> iList (_jobs);

@@ -1,0 +1,3 @@
+executable = ./x_sleep.pl
+arguments = $(stime)
+queue
