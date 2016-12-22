@@ -1,3 +1,4 @@
+//TEMPTEMP -- eliminate Job::_final and just test node pointer against Dag::_final_job?
 /***************************************************************
  *
  * Copyright (C) 1990-2007, Condor Team, Computer Sciences Department,
@@ -636,6 +637,7 @@ bool Dag::ProcessOneEvent (ULogEventOutcome outcome,
 				break;
 
 			case ULOG_PRESKIP:
+				//TEMPTEMP -- shit -- what if final node has preskip??
 				TerminateJob( job, recovery );
 				if(!recovery) {
 					--_preRunNodeCount;
@@ -769,6 +771,7 @@ Dag::ProcessTerminatedEvent(const ULogEvent *event, Job *job,
 					}
 				}
 
+				//TEMPTEMP -- hmm -- should this be here, or in ProcessJobProcEnd?
 				job->TerminateFailure();
 				if ( job->_queuedNodeJobProcs > 0 ) {
 				  // once one job proc fails, remove
@@ -850,6 +853,7 @@ Dag::RemoveBatchJob(Job *node) {
 //---------------------------------------------------------------------------
 // Note:  if job is the final node of the DAG, should we set _dagStatus
 // in here according to whether job succeeded or failed?  wenger 2014-03-18
+//TEMPTEMP -- also need to do that for post script of final node...
 void
 Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
 
@@ -872,6 +876,7 @@ Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
 		if ( job->DoRetry() ) {
 			RestartNode( job, recovery );
 		} else {
+		//TEMPTEMP -- why don't we call job->TerminateFailure in here?
 				// no more retries -- job failed
 			if( job->GetRetryMax() > 0 ) {
 					// add # of retries to error_text
@@ -2322,6 +2327,7 @@ Dag::WriteScriptToRescue( FILE *fp, Script *script )
 //===========================================================================
 
 //-------------------------------------------------------------------------
+//TEMPTEMP -- or reset DAG status in here??  WTF -- only called if node succeeded?
 void
 Dag::TerminateJob( Job* job, bool recovery, bool bootstrap )
 {
@@ -2332,6 +2338,12 @@ Dag::TerminateJob( Job* job, bool recovery, bool bootstrap )
 	if ( job->GetStatus() != Job::STATUS_DONE ) {
 		EXCEPT( "Node %s is not in DONE state", job->GetJobName() );
 	}
+//TEMPTEMP -- I'm *really* not sure this is the right place to do this...
+#if 1//TEMPTEMP
+	if ( job->GetFinal() ) {
+		_dagStatus = DAG_STATUS_OK;
+	}
+#endif //TEMPTEMP
 
 		// this is a little ugly, but since this function can be
 		// called multiple times for the same job, we need to be
@@ -2815,6 +2827,8 @@ Dag::DumpNodeStatus( bool held, bool removed )
 	Job::status_t dagJobStatus = Job::STATUS_SUBMITTED;
 	const char *statusNote = "";
 
+//TEMPTEMP -- hmm -- maybe this logic should get moved to somewhere else?
+//TEMPTEMP -- are these not the same values as DAG status?
 	if ( DoneSuccess( true ) ) {
 		dagJobStatus = Job::STATUS_DONE;
 		statusNote = "success";
