@@ -1,4 +1,5 @@
 //TEMPTEMP -- eliminate Job::_final and just test node pointer against Dag::_final_job?
+//TEMPTEMP -- shit -- even if multi-proc node is not final, it ends up getting listed as Un-Ready, not failed...
 /***************************************************************
  *
  * Copyright (C) 1990-2007, Condor Team, Computer Sciences Department,
@@ -723,6 +724,7 @@ void
 Dag::ProcessTerminatedEvent(const ULogEvent *event, Job *job,
 		bool recovery) {
 	if( job ) {
+debug_printf( DEBUG_QUIET, "DIAG Dag::ProcessTerminatedEvent(%s)\n", job->GetJobName() );//TEMPTEMP
 
 		DecrementProcCount( job );
 
@@ -816,6 +818,8 @@ Dag::ProcessTerminatedEvent(const ULogEvent *event, Job *job,
 		}
 
 		PrintReadyQ( DEBUG_DEBUG_2 );
+debug_printf( DEBUG_QUIET, "DIAG 2010 job %s status: %s\n", job->GetJobName(), job->GetStatusName() );//TEMPTEMP
+debug_printf( DEBUG_QUIET, "DIAG 2011 DAG status %d (%s)\n", _dagStatus, GetStatusName() );//TEMPTEMP
 
 		return;
 	}
@@ -856,6 +860,7 @@ Dag::RemoveBatchJob(Job *node) {
 //TEMPTEMP -- also need to do that for post script of final node...
 void
 Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
+debug_printf( DEBUG_QUIET, "DIAG Dag::ProcessJobProcEnd(%s)\n", job->GetJobName() );//TEMPTEMP
 
 	// This function should never be called when the dag object is
 	// being used to parse a splice.
@@ -873,6 +878,7 @@ Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
 	//
 
 	if ( failed && job->_scriptPost == NULL ) {
+debug_printf( DEBUG_QUIET, "DIAG 1110\n" );//TEMPTEMP
 		if ( job->DoRetry() ) {
 			RestartNode( job, recovery );
 		} else {
@@ -886,7 +892,9 @@ Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
 						job->GetRetries() );
 				delete [] tmp;   
 			}
-			if ( job->_queuedNodeJobProcs == 0 ) {
+			//TEMPTEMP? if ( job->_queuedNodeJobProcs == 0 ) {
+			if ( job->GetStatus() != Job::STATUS_ERROR ) {//TEMPTEMP?
+				//TEMPTEMP -- maybe we need to do this even if not all procs have finished yet -- but need to make sure to only do it once per node!!
 				_numNodesFailed++;
 				_metrics->NodeFinished( job->GetDagFile() != NULL, false );
 				if ( _dagStatus == DAG_STATUS_OK ) {
@@ -898,6 +906,7 @@ Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
 	}
 
 	if ( job->_queuedNodeJobProcs == 0 ) {
+debug_printf( DEBUG_QUIET, "DIAG 1210\n" );//TEMPTEMP
 			// All procs for this job are done.
 		debug_printf( DEBUG_NORMAL, "Node %s job completed\n",
 				job->GetJobName() );
@@ -2331,9 +2340,12 @@ Dag::WriteScriptToRescue( FILE *fp, Script *script )
 void
 Dag::TerminateJob( Job* job, bool recovery, bool bootstrap )
 {
+debug_printf( DEBUG_QUIET, "DIAG Dag::TerminateJob(%s)\n", job->GetJobName() );//TEMPTEMP
 	ASSERT( !(recovery && bootstrap) );
     ASSERT( job != NULL );
+	ASSERT( job->GetStatus() != Job::STATUS_ERROR );//TEMPTEMP?
 
+	//TEMPTEMP -- okay, I think here's where we mess up with multiple procs...
 	job->TerminateSuccess(); // marks job as STATUS_DONE
 	if ( job->GetStatus() != Job::STATUS_DONE ) {
 		EXCEPT( "Node %s is not in DONE state", job->GetJobName() );

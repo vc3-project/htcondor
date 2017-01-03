@@ -486,6 +486,7 @@ Job::TerminateSuccess()
 bool
 Job::TerminateFailure()
 {
+debug_printf( DEBUG_QUIET, "DIAG Job::TerminateFailure(%s)\n", GetJobName() );//TEMPTEMP
 	SetStatus( STATUS_ERROR );
 	return true;
 } 
