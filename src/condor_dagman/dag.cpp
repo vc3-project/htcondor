@@ -1529,7 +1529,7 @@ Dag::NodeTryEnd( Job *node, bool failed, bool recovery )
 	if ( failed ) {
 		if ( node->DoRetry() ) {
 				//TEMPTEMP -- is node->TerminateFailure() necessary?  We do that in PreScriptReaper but not other places...
-			//TEMPTEMP? node->TerminateFailure();
+			node->TerminateFailure();
 			RestartNode( node, recovery );
 		} else {
 				// no more retries -- job failed
@@ -2570,6 +2570,12 @@ Dag::TerminateJob( Job* job, bool recovery, bool bootstrap )
 	if ( job->GetStatus() != Job::STATUS_DONE ) {
 		EXCEPT( "Node %s is not in DONE state", job->GetJobName() );
 	}
+//TEMPTEMP -- I'm *really* not sure this is the right place to do this...
+#if 1//TEMPTEMP
+	if ( job->GetFinal() ) {
+		_dagStatus = DAG_STATUS_OK;
+	}
+#endif //TEMPTEMP
 
 		// this is a little ugly, but since this function can be
 		// called multiple times for the same job, we need to be
@@ -3062,7 +3068,12 @@ Dag::DumpNodeStatus( bool held, bool removed )
 	Job::status_t dagJobStatus = Job::STATUS_SUBMITTED;
 	const char *statusNote = "";
 
+//TEMPTEMP -- okay, here's where we figure out DAG status for the status file -- should this consider _dagStatus?
+//TEMPTEMP -- note:  final node status is "ready"!
+//TEMPTEMP -- hmm -- looks like maybe the status file is not getting re-written after the final node fails!
+debug_printf( DEBUG_QUIET, "DIAG 2010\n" );//TEMPTEMP
 	if ( DoneSuccess( true ) ) {
+debug_printf( DEBUG_QUIET, "DIAG 2011\n" );//TEMPTEMP
 		dagJobStatus = Job::STATUS_DONE;
 		statusNote = "success";
 			// In case we have a combination of abort-dag-on and final
@@ -3071,6 +3082,7 @@ Dag::DumpNodeStatus( bool held, bool removed )
 		markNodesError = true;
 
 	} else if ( DoneFailed( true ) ) {
+debug_printf( DEBUG_QUIET, "DIAG 2012\n" );//TEMPTEMP
 		dagJobStatus = Job::STATUS_ERROR;
 		if ( _dagStatus == DAG_STATUS_ABORT ) {
 			statusNote = "aborted";
@@ -3083,13 +3095,16 @@ Dag::DumpNodeStatus( bool held, bool removed )
 		}
 
 	} else if ( DoneCycle( true ) ) {
+debug_printf( DEBUG_QUIET, "DIAG 2013\n" );//TEMPTEMP
 		dagJobStatus = Job::STATUS_ERROR;
 		statusNote = "cycle";
 
 	} else if ( held ) {
+debug_printf( DEBUG_QUIET, "DIAG 2014\n" );//TEMPTEMP
 		statusNote = "held";
 
 	} else if ( removed ) {
+debug_printf( DEBUG_QUIET, "DIAG 2015\n" );//TEMPTEMP
 		if ( HasFinalNode() && !FinishedRunning( true ) ) {
 			dagJobStatus = Job::STATUS_SUBMITTED;
 			statusNote = "removed";
@@ -3099,6 +3114,7 @@ Dag::DumpNodeStatus( bool held, bool removed )
 			markNodesError = true;
 		}
 	} else if ( _dagIsAborted ) {
+debug_printf( DEBUG_QUIET, "DIAG 2016\n" );//TEMPTEMP
 		if ( HasFinalNode() && !FinishedRunning( true ) ) {
 			dagJobStatus = Job::STATUS_SUBMITTED;
 			statusNote = "aborted";
