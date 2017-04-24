@@ -95,6 +95,12 @@ void RenameRescueDagsAfter(const char *primaryDagFile,
 */
 MyString HaltFileName( const MyString &primaryDagFile );
 
+/** Generates the halt file name based on the primary DAG name and
+    directory.
+	@return The halt file path.
+*/
+MyString HaltFilePath( const MyString &primaryDagFile, const MyString &primaryDagDir );
+
 /** Attempts to unlink the given file, and prints an appropriate error
 	message if this fails (but doesn't return an error, so only call
 	this if a failure of the unlink is okay).

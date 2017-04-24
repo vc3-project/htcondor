@@ -1520,6 +1520,31 @@ Dag::SubmitReadyJobs(const Dagman &dm)
 		debug_printf( DEBUG_QUIET,
 					"DAG is halted because halt file %s exists\n",
 					_haltFile.Value() );
+            
+            // Propagate halt files to SubDAGS by creating new halt files
+            // in their respective locations.
+        if( !prevDagIsHalted ) {
+            Job* job;            
+            _jobs.Rewind();
+            while( (job = _jobs.Next() ) != NULL ) {
+                if( job->GetDagFile() ) {
+                    MyString haltFile, haltFileError;
+                    if( job->GetDirectory() ) {
+                        haltFile = HaltFilePath( job->GetDagFile(), job->GetDirectory() );
+                    }
+                    else {
+                        haltFile = HaltFileName( job->GetDagFile() ); 
+                    }
+                    MakePathAbsolute(haltFile, haltFileError);
+                    FILE *fp = safe_fopen_wrapper_follow( haltFile.Value(), "ab+" );
+                	if ( fp == NULL ) {
+                		debug_printf( DEBUG_QUIET,
+                					"ERROR: could not create halt file %s.\n",
+                					haltFile.Value());
+                	}
+                }
+            }
+        }
 		if ( _finalNodeRun ) {
 			debug_printf( DEBUG_QUIET,
 						"Continuing to allow final node to run\n" );
@@ -3495,7 +3520,7 @@ Dag::ChooseDotFileName(MyString &dot_file_name)
 //---------------------------------------------------------------------------
 bool Dag::Add( Job& job )
 {
-	int insertResult = _nodeNameHash.insert( job.GetJobName(), &job );
+    int insertResult = _nodeNameHash.insert( job.GetJobName(), &job );
 	ASSERT( insertResult == 0 );
 
 	insertResult = _nodeIDHash.insert( job.GetJobID(), &job );

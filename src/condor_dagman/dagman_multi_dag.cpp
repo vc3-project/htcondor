@@ -290,6 +290,15 @@ HaltFileName( const MyString &primaryDagFile )
 }
 
 //-------------------------------------------------------------------------
+MyString
+HaltFilePath( const MyString &primaryDagFile, const MyString &primaryDagDir )
+{
+	MyString haltFile = primaryDagDir + "/" + primaryDagFile + ".halt";
+
+	return haltFile;
+}
+
+//-------------------------------------------------------------------------
 void
 tolerant_unlink( const char *pathname )
 {
