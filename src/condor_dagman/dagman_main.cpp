@@ -343,6 +343,11 @@ Dagman::Config()
 	debug_printf( DEBUG_NORMAL, "DAGMAN_PROHIBIT_MULTI_JOBS setting: %s\n",
 				prohibitMultiJobs ? "True" : "False" );
 
+	propagateHaltsToSubdags = param_boolean( "DAGMAN_PROPAGATE_HALTS_TO_SUBDAGS",
+				propagateHaltsToSubdags );
+	debug_printf( DEBUG_NORMAL, "DAGMAN_PROPAGATE_HALTS_TO_SUBDAGS setting: %s\n",
+				propagateHaltsToSubdags ? "True" : "False" );
+
 	submitDepthFirst = param_boolean( "DAGMAN_SUBMIT_DEPTH_FIRST",
 				submitDepthFirst );
 	debug_printf( DEBUG_NORMAL, "DAGMAN_SUBMIT_DEPTH_FIRST setting: %s\n",
@@ -1125,7 +1130,9 @@ void main_init (int argc, char ** const argv) {
 						  dagman.maxIdle, dagman.retrySubmitFirst,
 						  dagman.retryNodeFirst, dagman.condorRmExe,
 						  &dagman.DAGManJobId,
-						  dagman.prohibitMultiJobs, dagman.submitDepthFirst,
+						  dagman.prohibitMultiJobs, 
+                          dagman.propagateHaltsToSubdags, 
+                          dagman.submitDepthFirst,
 						  dagman._defaultNodeLog.Value(),
 						  dagman._generateSubdagSubmits,
 						  &dagman._submitDagDeepOpts,

@@ -90,10 +90,10 @@ Dag::Dag( /* const */ StringList &dagFiles,
 		  bool useDagDir, int maxIdleJobProcs, bool retrySubmitFirst,
 		  bool retryNodeFirst, const char *condorRmExe,
 		  const CondorID *DAGManJobID,
-		  bool prohibitMultiJobs, bool submitDepthFirst,
-		  const char *defaultNodeLog, bool generateSubdagSubmits,
-		  SubmitDagDeepOptions *submitDagDeepOpts, bool isSplice,
-		  const MyString &spliceScope ) :
+		  bool prohibitMultiJobs, bool propagateHaltsToSubdags, 
+          bool submitDepthFirst, const char *defaultNodeLog, 
+          bool generateSubdagSubmits, SubmitDagDeepOptions *submitDagDeepOpts, 
+          bool isSplice, const MyString &spliceScope ) :
     _maxPreScripts        (maxPreScripts),
     _maxPostScripts       (maxPostScripts),
 	MAX_SIGNAL			  (64),
@@ -123,6 +123,7 @@ Dag::Dag( /* const */ StringList &dagFiles,
 	_maxIdleDeferredCount (0),
 	_catThrottleDeferredCount (0),
 	_prohibitMultiJobs	  (prohibitMultiJobs),
+    _propagateHaltsToSubdags (propagateHaltsToSubdags),
 	_submitDepthFirst	  (submitDepthFirst),
 	_defaultNodeLog		  (defaultNodeLog),
 	_generateSubdagSubmits (generateSubdagSubmits),
@@ -1527,8 +1528,12 @@ Dag::SubmitReadyJobs(const Dagman &dm)
             Job* job;            
             _jobs.Rewind();
             while( (job = _jobs.Next() ) != NULL ) {
-                if( job->GetDagFile() ) {
-                    MyString haltFile, haltFileError;
+                    
+                    // If this job has a valid DAG file, it represents a sub-DAG
+                debug_printf( DEBUG_QUIET, "MRC [Dag::SubmitReadyJobs] propagateHaltsToSubdags=%d\n", _propagateHaltsToSubdags);          
+                if( job->GetDagFile() && _propagateHaltsToSubdags ) {
+                    debug_printf( DEBUG_QUIET, "MRC [Dag::SubmitReadyJobs] creating halt file for %s\n", job->GetJobName());  
+                    MyString haltFile;
                     if( job->GetDirectory() && strlen( job->GetDirectory() ) > 0 ) {
                         haltFile = HaltFilePath( job->GetDagFile(), 
                                                         job->GetDirectory() );
@@ -1542,9 +1547,9 @@ Dag::SubmitReadyJobs(const Dagman &dm)
                 	if ( fp == NULL ) {
                 		debug_printf( DEBUG_QUIET,
                 					"ERROR: could not create halt file %s.\n",
-                					haltFile.Value());
+                					haltFile.Value() );
                 	}
-                    fclose(fp);
+                    fclose( fp );
                 }
             }
         }

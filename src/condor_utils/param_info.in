@@ -536,6 +536,12 @@ type=bool
 tags=dagman,dagman_main
 restart=never
 
+[DAGMAN_PROPAGATE_HALTS_TO_SUBDAGS]
+default=true
+type=bool
+tags=dagman,dagman_main
+restart=never
+
 [DAGMAN_SUBMIT_DEPTH_FIRST]
 default=false
 type=bool

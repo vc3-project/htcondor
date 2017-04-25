@@ -112,6 +112,8 @@ class Dag {
 		@param DAGManJobId HTCondor ID of this DAGMan process
 		@param prohibitMultiJobs whether submit files queueing multiple
 			   job procs are prohibited
+        @param propagateHaltsToSubdags whether halt files to the top-level DAG 
+               should be propagated to any sub-DAGs that exist.
 		@param submitDepthFirst whether ready nodes should be submitted
 			   in depth-first (as opposed to breadth-first) order
 		@param defaultNodeLog The user log file to be used for node jobs.
@@ -131,9 +133,9 @@ class Dag {
 		 bool useDagDir, int maxIdleJobProcs, bool retrySubmitFirst,
 		 bool retryNodeFirst, const char *condorRmExe,
 		 const CondorID *DAGManJobId,
-		 bool prohibitMultiJobs, bool submitDepthFirst,
-		 const char *defaultNodeLog, bool generateSubdagSubmits,
-		 SubmitDagDeepOptions *submitDagDeepOpts,
+		 bool prohibitMultiJobs, bool propagateHaltsToSubdags, 
+         bool submitDepthFirst, const char *defaultNodeLog, 
+         bool generateSubdagSubmits, SubmitDagDeepOptions *submitDagDeepOpts,
 		 bool isSplice = false, const MyString &spliceScope = "root" );
 
     ///
@@ -612,7 +614,9 @@ class Dag {
 
 	bool ProhibitMultiJobs() const { return _prohibitMultiJobs; }
 
-		/** Set the config file used for this DAG.
+	bool PropagateHaltsToSubdags() const { return _propagateHaltsToSubdags; }
+
+    	/** Set the config file used for this DAG.
 			@param configFile The configuration file for this DAG.
 		*/
 	void SetConfigFile( const char *configFile ) { _configFile = configFile; }
@@ -1142,6 +1146,10 @@ private:
 		// whether or not to prohibit multiple job proc submitsn (e.g.,
 		// node jobs that create more than one job proc)
 	bool		_prohibitMultiJobs;
+
+		// Whether or not to propagate halt files directed at the main DAG
+        // to any sub-DAGs that exist in the jobs list. (Default is true.)
+	bool    _propagateHaltsToSubdags;
 
 		// Whether to submit ready nodes in depth-first order (as opposed
 		// to breadth-first order).

@@ -1769,6 +1769,7 @@ parse_splice(
 							dag->CondorRmExe(),
 							dag->DAGManJobId(),
 							dag->ProhibitMultiJobs(),
+                            dag->PropagateHaltsToSubdags(),
 							dag->SubmitDepthFirst(),
 							dag->DefaultNodeLog(),
 							dag->GenerateSubdagSubmits(),

@@ -137,6 +137,10 @@ class Dagman {
 		// node jobs that create more than one job proc)
 	bool prohibitMultiJobs;
 
+		// Whether or not to propagate halt files directed at the main DAG
+        // to any sub-DAGs that exist in the jobs list. (Default is true.)
+	bool propagateHaltsToSubdags;
+
 		// Whether to abort duplicates DAGMans (if multiple DAGMans are
 		// run on the same DAG at the same time on the same machine,
 		// all but the first will be aborted).
