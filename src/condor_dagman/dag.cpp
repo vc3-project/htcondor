@@ -1529,19 +1529,22 @@ Dag::SubmitReadyJobs(const Dagman &dm)
             while( (job = _jobs.Next() ) != NULL ) {
                 if( job->GetDagFile() ) {
                     MyString haltFile, haltFileError;
-                    if( job->GetDirectory() ) {
-                        haltFile = HaltFilePath( job->GetDagFile(), job->GetDirectory() );
+                    if( job->GetDirectory() && strlen( job->GetDirectory() ) > 0 ) {
+                        haltFile = HaltFilePath( job->GetDagFile(), 
+                                                        job->GetDirectory() );
                     }
                     else {
                         haltFile = HaltFileName( job->GetDagFile() ); 
                     }
-                    MakePathAbsolute(haltFile, haltFileError);
-                    FILE *fp = safe_fopen_wrapper_follow( haltFile.Value(), "ab+" );
+
+                        // Create the halt file
+                    FILE *fp = safe_fopen_wrapper_follow( haltFile.Value(), "w" );
                 	if ( fp == NULL ) {
                 		debug_printf( DEBUG_QUIET,
                 					"ERROR: could not create halt file %s.\n",
                 					haltFile.Value());
                 	}
+                    fclose(fp);
                 }
             }
         }
