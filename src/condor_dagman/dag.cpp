@@ -1530,9 +1530,7 @@ Dag::SubmitReadyJobs(const Dagman &dm)
             while( (job = _jobs.Next() ) != NULL ) {
                     
                     // If this job has a valid DAG file, it represents a sub-DAG
-                debug_printf( DEBUG_QUIET, "MRC [Dag::SubmitReadyJobs] propagateHaltsToSubdags=%d\n", _propagateHaltsToSubdags);          
                 if( job->GetDagFile() && _propagateHaltsToSubdags ) {
-                    debug_printf( DEBUG_QUIET, "MRC [Dag::SubmitReadyJobs] creating halt file for %s\n", job->GetJobName());  
                     MyString haltFile;
                     if( job->GetDirectory() && strlen( job->GetDirectory() ) > 0 ) {
                         haltFile = HaltFilePath( job->GetDagFile(), 
