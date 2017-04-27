@@ -611,6 +611,21 @@ Neither the job associated with the node nor
 the POST script will be executed,
 and the node will be marked as successful.
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsubsection{\label{sec:dagman_no_post_on_fail_command}NO\_POST\_ON\_FAIL}
+\label{dagman:NO-POST-ON-FAIL}
+\index{DAG input file!NO\_POST\_ON\_FAIL command}
+
+One possible confusion with DAGMan is when a POST script succeeds, the whole 
+node is considered successful -- even if the actual job failed. This behavior
+can be changed with the addition of a \Arg{NO\_POST\_ON\_FAIL} command. 
+A \Arg{NO\_POST\_ON\_FAIL} line within the DAG input file uses the syntax: 
+
+\Opt{NO\_POST\_ON\_FAIL} \Arg{JobName}|\Opt{ALL\_NODES}
+
+When this option is set, any job failure will result in the POST script not
+running and the node failing. 
+
 % $ % this comment just has a dollar sign so that emacs will not think
 %	  we're inside of a math section and will draw things more nicely
 
@@ -3064,6 +3079,7 @@ the option \Arg{ALL\_NODES}:
 \begin{itemize}
 \item \Opt{SCRIPT}
 \item \Opt{PRE\_SKIP}
+\item \Opt{NO\_POST\_ON\_FAIL}
 \item \Opt{RETRY}
 \item \Opt{ABORT-DAG-ON}
 \item \Opt{VARS}

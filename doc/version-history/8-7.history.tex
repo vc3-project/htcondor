@@ -40,6 +40,13 @@ then is put on hold because the output file on the submit machine cannot
 by written to.
 \Ticket{6220}
 
+\item Added a DAGMan input file option, NO\_POST\_ON\_FAIL, which indicates that
+a job failure should force DAGMan to skip the POST script and fail the entire
+node. This allows users to work around the (sometimes confusing) default 
+behavior in which a job can fail but the node still succeed if the POST script
+executes successfully.
+\Ticket{6241}
+
 \end{itemize}
 
 \noindent Bugs Fixed:

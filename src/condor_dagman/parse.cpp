@@ -2431,8 +2431,7 @@ parse_no_post_on_fail(
 	const char *filename, 
 	int  lineNumber )
 {
-    debug_printf( DEBUG_QUIET, "MRC [parse_no_post_on_fail] called\n");
-	const char* example = "NO_POST_ON_FAIL <JobName>";
+    const char* example = "NO_POST_ON_FAIL <JobName>";
 	MyString whynot;
 
 		//
@@ -2445,7 +2444,6 @@ parse_no_post_on_fail(
 		exampleSyntax( example );
 		return false;
 	}
-    debug_printf( DEBUG_QUIET, "MRC [parse_no_post_on_fail] jobName=%s\n", jobName);
         
 	const char *jobNameOrig = jobName; // for error output
 	debug_printf( DEBUG_DEBUG_1, "jobName: %s\n", jobName );
