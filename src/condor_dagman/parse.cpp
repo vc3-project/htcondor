@@ -2446,12 +2446,11 @@ parse_no_post_on_fail(
 		return false;
 	}
     debug_printf( DEBUG_QUIET, "MRC [parse_no_post_on_fail] jobName=%s\n", jobName);
-        /*
+        
 	const char *jobNameOrig = jobName; // for error output
 	debug_printf( DEBUG_DEBUG_1, "jobName: %s\n", jobName );
 	MyString tmpJobName = munge_job_name( jobName );
 	jobName = tmpJobName.Value();
-        */
 
 		//
 		// Anything else is garbage
@@ -2472,14 +2471,12 @@ parse_no_post_on_fail(
 		job->SetNoPostOnFail( true );
 	}
 
-        /*
 	if ( jobName ) {
 		debug_printf( DEBUG_QUIET, 
 					  "ERROR: %s (line %d): Unknown Job %s\n",
 					  filename, lineNumber, jobNameOrig );
 		return false;
 	}
-        */
 
 	return true;
 }
