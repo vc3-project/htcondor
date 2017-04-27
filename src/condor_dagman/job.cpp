@@ -128,6 +128,7 @@ Job::Job( const char* jobName,
 	_effectivePriority = _explicitPriority;
 
 	_noop = false;
+    _noPostOnFail = false;
 
 	_jobTag = NULL;
 	_jobstateSeqNum = 0;

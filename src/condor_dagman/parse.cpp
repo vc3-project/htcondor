@@ -95,6 +95,8 @@ static bool parse_connect( Dag  *dag, const char *filename, int  lineNumber );
 static bool parse_pin_in_out( Dag  *dag, const char *filename,
 			int  lineNumber, bool isPinIn );
 static bool parse_include( Dag  *dag, const char *filename, int  lineNumber );
+static bool parse_no_post_on_fail( Dag  *dag, const char *filename, 
+            int  lineNumber );
 static MyString munge_job_name(const char *jobName);
 
 static MyString current_splice_scope(void);
@@ -488,6 +490,12 @@ bool parse(Dag *dag, const char *filename, bool useDagDir,
 						filename, lineNumber );
 		}
 
+        // Handle a NO_POST_ON_FAIL spec
+        else if(strcasecmp(token, "NO_POST_ON_FAIL") == 0) {
+			parsed_line_successfully = parse_no_post_on_fail( dag,
+						filename, lineNumber );
+		}
+
 		// None of the above means that there was bad input.
 		else {
 			debug_printf( DEBUG_QUIET, "%s (line %d): "
@@ -495,7 +503,8 @@ bool parse(Dag *dag, const char *filename, bool useDagDir,
 				"RETRY, ABORT-DAG-ON, DOT, VARS, PRIORITY, CATEGORY, "
 				"MAXJOBS, CONFIG, SET_JOB_ATTR, SPLICE, FINAL, "
 				"NODE_STATUS_FILE, REJECT, JOBSTATE_LOG, PRE_SKIP, DONE, "
-				"CONNECT, PIN_IN, PIN_OUT, or INCLUDE token (found %s)\n",
+				"CONNECT, PIN_IN, PIN_OUT, INCLUDE or NO_POST_ON_FAIL "
+                "token (found %s)\n",
 				filename, lineNumber, token );
 			parsed_line_successfully = false;
 		}
@@ -2409,6 +2418,72 @@ parse_include(
 		// 'condor_submit -usedagdir' is specified.
 	return parse( dag, tmpFilename.Value(), false, false );
 }
+
+//-----------------------------------------------------------------------------
+// 
+// Function: parse_no_post_on_fail
+// Purpose:  Parse a line of the format "NO_POST_ON_FAIL <jobname>"
+// 
+//-----------------------------------------------------------------------------
+static bool 
+parse_no_post_on_fail(
+	Dag  *dag, 
+	const char *filename, 
+	int  lineNumber )
+{
+    debug_printf( DEBUG_QUIET, "MRC [parse_no_post_on_fail] called\n");
+	const char* example = "NO_POST_ON_FAIL <JobName>";
+	MyString whynot;
+
+		//
+		// Second token is the JobName
+		//
+	const char* jobName = strtok( NULL, DELIMITERS );
+	if ( jobName == NULL ) {
+		debug_printf( DEBUG_QUIET, "ERROR: %s (line %d): Missing job name\n",
+				filename, lineNumber );
+		exampleSyntax( example );
+		return false;
+	}
+    debug_printf( DEBUG_QUIET, "MRC [parse_no_post_on_fail] jobName=%s\n", jobName);
+        /*
+	const char *jobNameOrig = jobName; // for error output
+	debug_printf( DEBUG_DEBUG_1, "jobName: %s\n", jobName );
+	MyString tmpJobName = munge_job_name( jobName );
+	jobName = tmpJobName.Value();
+        */
+
+		//
+		// Anything else is garbage
+		//
+	const char *nextTok = strtok( NULL, DELIMITERS );
+	if ( nextTok ) {
+		debug_printf( DEBUG_QUIET, "ERROR: %s (line %d): invalid "
+				"parameter \"%s\"\n", filename, lineNumber, nextTok );
+		exampleSyntax( example );
+		return false;
+	}
+
+	Job *job;
+	while ( ( job = dag->FindAllNodesByName( jobName,
+				"In parse_no_post_on_fail(): skipping node %s because reasons (%s: %d)\n",
+				filename, lineNumber ) ) ) {
+        jobName = NULL;
+		job->SetNoPostOnFail( true );
+	}
+
+        /*
+	if ( jobName ) {
+		debug_printf( DEBUG_QUIET, 
+					  "ERROR: %s (line %d): Unknown Job %s\n",
+					  filename, lineNumber, jobNameOrig );
+		return false;
+	}
+        */
+
+	return true;
+}
+
 
 static MyString munge_job_name(const char *jobName)
 {

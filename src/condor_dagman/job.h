@@ -184,6 +184,7 @@ class Job {
 	bool GetFinal() const { return _final; }
 	void SetNoop( bool value ) { _noop = value; }
 	bool GetNoop( void ) const { return _noop; }
+    void SetNoPostOnFail( bool value ) { _noPostOnFail = value; debug_printf(DEBUG_QUIET, "MRC [Job::SetNoPostOnFail]\n"); }
 
 	Script * _scriptPre;
 	Script * _scriptPost;
@@ -581,6 +582,11 @@ private:
 		// Skip the rest of the node (and consider it successful) if the
 		// PRE script exits with this value.  (-1 means undefined.)
 	int _preskip;
+
+        // Whether or not to run the POST script if this job fails. If true,
+        // a job failure will skip the POST script and consider the whole node
+        // failed. (Default is false)
+	bool _noPostOnFail;
 
 	enum {
 		PRE_SKIP_INVALID = -1,

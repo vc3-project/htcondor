@@ -4063,6 +4063,7 @@ Dag::ProcessFailedSubmit( Job *node, int max_submit_attempts )
 {
 	// This function should never be called when the Dag object is being used
 	// to parse a splice.
+    debug_printf(DEBUG_QUIET, "MRC [Dag::ProcessFailedSubmit] jobname=%s\n", node->GetJobName());
 	ASSERT( _isSplice == false );
 
 	_jobstateLog.WriteSubmitFailure( node );
