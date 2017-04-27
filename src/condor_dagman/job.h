@@ -184,7 +184,8 @@ class Job {
 	bool GetFinal() const { return _final; }
 	void SetNoop( bool value ) { _noop = value; }
 	bool GetNoop( void ) const { return _noop; }
-    void SetNoPostOnFail( bool value ) { _noPostOnFail = value; debug_printf(DEBUG_QUIET, "MRC [Job::SetNoPostOnFail]\n"); }
+    void SetNoPostOnFail( bool value ) { _noPostOnFail = value; }
+    bool GetNoPostOnFail() const { return _noPostOnFail; }
 
 	Script * _scriptPre;
 	Script * _scriptPost;

@@ -875,7 +875,6 @@ Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
 	// now to make sure parallel universe support is complete for 6.7.17.
 	// wenger 2006-02-15.
 	//
-
 	if ( failed && job->_scriptPost == NULL ) {
 		if ( job->DoRetry() ) {
 			RestartNode( job, recovery );
@@ -896,6 +895,19 @@ Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
 		}
 		return;
 	}
+
+        // If _noPostOnFail is set to true, then we skip the post script and
+        // the whole job fails. In theory we could probably merge this logic
+        // with the code block above, but it would get complicated and 
+        // difficult to maintain or debug.
+    if ( failed && job->_scriptPost != NULL && job->GetNoPostOnFail() == true ) {
+        _numNodesFailed++;
+		_metrics->NodeFinished( job->GetDagFile() != NULL, false );
+		if ( _dagStatus == DAG_STATUS_OK ) {
+			_dagStatus = DAG_STATUS_NODE_FAILED;
+		}
+        return;
+    }
 
 	if ( job->_queuedNodeJobProcs == 0 ) {
 			// All procs for this job are done.
@@ -1495,7 +1507,7 @@ Dag::StartFinalNode()
 int
 Dag::SubmitReadyJobs(const Dagman &dm)
 {
-	debug_printf( DEBUG_DEBUG_1, "Dag::SubmitReadyJobs()\n" );
+    debug_printf( DEBUG_DEBUG_1, "Dag::SubmitReadyJobs()\n" );
 
 	time_t cycleStart = time( NULL );
 
@@ -1539,12 +1551,12 @@ Dag::SubmitReadyJobs(const Dagman &dm)
 	}
 
 	while( numSubmitsThisCycle < dm.max_submits_per_interval ) {
-
+        
 //		PrintReadyQ( DEBUG_DEBUG_4 );
 
 			// no jobs ready to submit
     	if( _readyQ->IsEmpty() ) {
-			break; // break out of while loop
+            break; // break out of while loop
     	}
 
     		// max jobs already submitted
@@ -1608,16 +1620,16 @@ Dag::SubmitReadyJobs(const Dagman &dm)
 				// Note:  I'm not sure why we don't just use the default
 				// constructor here.  wenger 2015-09-25
     		CondorID condorID( 0, 0, 0 );
-			submit_result_t submit_result = SubmitNodeJob( dm, job, condorID );
+            submit_result_t submit_result = SubmitNodeJob( dm, job, condorID );
 	
 				// Note: if instead of switch here so we can use break
 				// to break out of while loop.
 			if ( submit_result == SUBMIT_RESULT_OK ) {
-				ProcessSuccessfulSubmit( job, condorID );
+                ProcessSuccessfulSubmit( job, condorID );
     			numSubmitsThisCycle++;
 
 			} else if ( submit_result == SUBMIT_RESULT_FAILED || submit_result == SUBMIT_RESULT_NO_SUBMIT ) {
-				ProcessFailedSubmit( job, dm.max_submit_attempts );
+                ProcessFailedSubmit( job, dm.max_submit_attempts );
 				break; // break out of while loop
 			} else {
 				EXCEPT( "Illegal submit_result_t value: %d", submit_result );
@@ -4063,8 +4075,7 @@ Dag::ProcessFailedSubmit( Job *node, int max_submit_attempts )
 {
 	// This function should never be called when the Dag object is being used
 	// to parse a splice.
-    debug_printf(DEBUG_QUIET, "MRC [Dag::ProcessFailedSubmit] jobname=%s\n", node->GetJobName());
-	ASSERT( _isSplice == false );
+    ASSERT( _isSplice == false );
 
 	_jobstateLog.WriteSubmitFailure( node );
 
