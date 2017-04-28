@@ -1,0 +1,9 @@
+JOB A job_dagman_no_post_on_fail-A.cmd
+JOB B job_dagman_no_post_on_fail-B.cmd
+
+SCRIPT POST A job_dagman_no_post_on_fail-A.sh
+SCRIPT POST B job_dagman_no_post_on_fail-B.sh
+
+PARENT A CHILD B
+
+NO_POST_ON_FAIL B
