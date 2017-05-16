@@ -314,7 +314,7 @@ protected:
 	class RcvMsg {
 		
 		char m_partial_cksum[MAC_SIZE];
-                CONDOR_MD_MODE  mode_;
+                CONDOR_MD_MODE  md_mode_;
                 Condor_MD_MAC * mdChecker_;
 		ReliSock      * p_sock; //preserve parent pointer to use for condor_read/write
 		bool		m_partial_packet; // A partial packet is stored.
@@ -335,7 +335,7 @@ protected:
 	} rcv_msg;
 
 	class SndMsg {
-                CONDOR_MD_MODE  mode_;
+                CONDOR_MD_MODE  md_mode_;
                 Condor_MD_MAC * mdChecker_;
 		ReliSock      * p_sock;
 		Buf		*m_out_buf;

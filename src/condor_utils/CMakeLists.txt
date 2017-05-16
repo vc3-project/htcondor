@@ -69,8 +69,9 @@ if (DARWIN)
 	set_source_files_properties(../condor_io/condor_auth_passwd.cpp PROPERTIES COMPILE_FLAGS -Wno-deprecated-declarations)
 	set_source_files_properties(../condor_io/condor_auth_ssl.cpp PROPERTIES COMPILE_FLAGS -Wno-deprecated-declarations)
 	set_source_files_properties(../condor_io/condor_crypt.cpp PROPERTIES COMPILE_FLAGS -Wno-deprecated-declarations)
-	set_source_files_properties(../condor_io/condor_crypt_3des.cpp PROPERTIES COMPILE_FLAGS -Wno-deprecated-declarations)
 	set_source_files_properties(../condor_io/condor_crypt_blowfish.cpp PROPERTIES COMPILE_FLAGS -Wno-deprecated-declarations)
+	set_source_files_properties(../condor_io/condor_crypt_3des.cpp PROPERTIES COMPILE_FLAGS -Wno-deprecated-declarations)
+	set_source_files_properties(../condor_io/condor_crypt_aes128.cpp PROPERTIES COMPILE_FLAGS -Wno-deprecated-declarations)
 endif()
 
 #On windows we add the cpp file into the build 

@@ -340,6 +340,7 @@ ReliSock::put_bytes_nobuffer( char *buffer, int length, int send_size )
 		cur = (char *)buf;
 	}
 	else {
+		l_out = length;
 		cur = buffer;
 	}
 
@@ -347,7 +348,7 @@ ReliSock::put_bytes_nobuffer( char *buffer, int length, int send_size )
 	// Note: send_size param is 1 (true) by default.
 	this->encode();
 	if ( send_size ) {
-		ASSERT( this->code(length) != FALSE );
+		ASSERT( this->code(l_out) != FALSE );
 		ASSERT( this->end_of_message() != FALSE );
 	}
 
@@ -358,16 +359,16 @@ ReliSock::put_bytes_nobuffer( char *buffer, int length, int send_size )
 	}
 
 	// Optimize transfer by writing in pagesized chunks.
-	for(i = 0; i < length;)
+	for(i = 0; i < l_out;)
 	{
 		// If there is less then a page left.
-		if( (length - i) < pagesize ) {
-			result = condor_write(peer_description(), _sock, cur, (length - i), _timeout);
+		if( (l_out - i) < pagesize ) {
+			result = condor_write(peer_description(), _sock, cur, (l_out - i), _timeout);
 			if( result < 0 ) {
                                 goto error;
 			}
-			cur += (length - i);
-			i += (length - i);
+			cur += (l_out - i);
+			i += (l_out - i);
 		} else {  
 			// Send another page...
 			result = condor_write(peer_description(), _sock, cur, pagesize, _timeout);
@@ -438,11 +439,13 @@ ReliSock::get_bytes_nobuffer(char *buffer, int max_length, int receive_size)
 		// See if it needs to be decrypted
 		if (get_encryption()) {
 			unwrap((unsigned char *) buffer, result, buf, length);  // I am reusing length
-			memcpy(buffer, buf, result);
+			memcpy(buffer, buf, length);
 			free(buf);
+		} else {
+			length = result;
 		}
-		_bytes_recvd += result;
-		return result;
+		_bytes_recvd += length;
+		return length;
 	}
  error:
         return -1;
@@ -602,8 +605,9 @@ ReliSock::put_bytes(const void *data, int sz)
             }
         }
         else {
-            if((dta = (unsigned char *) malloc(sz)) != 0)
-		memcpy(dta, data, sz);
+            l_out = sz;
+            if((dta = (unsigned char *) malloc(l_out)) != 0)
+		memcpy(dta, data, l_out);
         }
 
 	ignore_next_encode_eom = FALSE;
@@ -615,7 +619,7 @@ ReliSock::put_bytes(const void *data, int sz)
 			// This would block and the user asked us to work non-buffered - force the
 			// buffer to grow to hold the data for now.
 			if (retval == 3) {
-				nw += snd_msg.buf.put_force(&((char *)dta)[nw], sz-nw);
+				nw += snd_msg.buf.put_force(&((char *)dta)[nw], l_out-nw);
 				m_has_backlog = true;
 				break;
 			} else if (!retval) {
@@ -632,14 +636,14 @@ ReliSock::put_bytes(const void *data, int sz)
 			snd_msg.buf.seek(header_size);
 		}
 		
-		if (dta && (tw = snd_msg.buf.put_max(&((char *)dta)[nw], sz-nw)) < 0) {
+		if (dta && (tw = snd_msg.buf.put_max(&((char *)dta)[nw], l_out-nw)) < 0) {
 			free(dta);
 		dta = NULL;
 			return -1;
 		}
 		
 		nw += tw;
-		if (nw >= sz) {
+		if (nw >= l_out) {
 			break;
 		}
 	}
@@ -682,13 +686,17 @@ ReliSock::get_bytes(void *dta, int max_sz)
 	if (bytes > 0) {
             if (get_encryption()) {
                 unwrap((unsigned char *) dta, bytes, data, length);
-                memcpy(dta, data, bytes);
+                memcpy(dta, data, length);
                 free(data);
+            } else {
+                length = bytes;
             }
-            _bytes_recvd += bytes;
+            _bytes_recvd += length;
+        } else {
+            length = bytes;
         }
         
-	return bytes;
+	return length;
 }
 
 
@@ -721,7 +729,7 @@ bool ReliSock::RcvMsg::init_MD(CONDOR_MD_MODE mode, KeyInfo * key)
         return false;
     }
 
-    mode_ = mode;
+    md_mode_ = mode;
     delete mdChecker_;
 	mdChecker_ = 0;
 
@@ -733,7 +741,7 @@ bool ReliSock::RcvMsg::init_MD(CONDOR_MD_MODE mode, KeyInfo * key)
 }
 
 ReliSock::RcvMsg :: RcvMsg() : 
-    mode_(MD_OFF),
+    md_mode_(MD_OFF),
     mdChecker_(0), 
 	p_sock(0),
 	m_partial_packet(false),
@@ -756,6 +764,7 @@ void ReliSock::RcvMsg::reset()
 	buf.reset();
 }
 
+
 int ReliSock::RcvMsg::rcv_packet( char const *peer_description, SOCKET _sock, int _timeout)
 {
 	char	        hdr[MAX_HEADER_SIZE];
@@ -773,7 +782,7 @@ int ReliSock::RcvMsg::rcv_packet( char const *peer_description, SOCKET _sock, in
 		goto read_packet;
 	}
 
-	header_size = (mode_ != MD_OFF) ? MAX_HEADER_SIZE : NORMAL_HEADER_SIZE;
+	header_size = (md_mode_ != MD_OFF) ? MAX_HEADER_SIZE : NORMAL_HEADER_SIZE;
 
 	retval = condor_read(peer_description,_sock,hdr,header_size,_timeout, 0, p_sock->is_non_blocking());
 	if ( retval == 0 ) {   // 0 means that the read would have blocked; unlike a normal read(), condor_read
@@ -836,7 +845,7 @@ read_packet:
 		if (p_sock->is_non_blocking() && (tmp_len >= 0)) {
 			m_partial_packet = true;
 			m_remaining_read_length = len - tmp_len;
-			if ( mode_ != MD_OFF && cksum_ptr != m_partial_cksum ) {
+			if ( md_mode_ != MD_OFF && cksum_ptr != m_partial_cksum ) {
 				memcpy( m_partial_cksum, cksum_ptr, sizeof(m_partial_cksum) );
 			}
 			return 2;
@@ -850,7 +859,7 @@ read_packet:
 	}
 
         // Now, check MD
-        if (mode_ != MD_OFF) {
+        if (md_mode_ != MD_OFF) {
             if (!m_tmp->verifyMD(cksum_ptr, mdChecker_)) {
                 delete m_tmp;
 		m_tmp = NULL;
@@ -858,7 +867,38 @@ read_packet:
                 return FALSE;  // or something other than this
             }
         }
-        
+
+
+        // Unwrap (decrypt) the contents of the ENTIRE packet (excluding header).
+        // This is new behavior in 8.7.x.  Previously crypto happened at the
+        // put_bytes/get_bytes layer.
+        if (p_sock->get_encryption()) {
+            dprintf(D_ALWAYS, "ZKM: decrypting packet! header size == %i, encrypted length == %i.\n", header_size, len);
+
+            unsigned char* plain_text = 0;
+            int plain_len = 0;
+
+            p_sock->unwrap(
+              // encrypted message and length are inputs
+              &(((unsigned char*)(m_tmp->get_full()))[header_size]), len,
+
+              // plain message and length are outputs
+              plain_text, plain_len
+            );
+
+            dprintf(D_ALWAYS, "ZKM: decrypting packet! plain length == %i.\n", plain_len);
+
+            // move new buffer into m_tmp.  clean up old one when it goes out of scope.
+            Buf tmp_buf;
+            tmp_buf.put_force(plain_text, plain_len);
+            m_tmp->swap(tmp_buf);
+
+            dprintf(D_ALWAYS, "ZKM: decrypting packet! buffers swapped!\n");
+        } else {
+            dprintf(D_ALWAYS, "ZKM: NOT decrypting packet!\n");
+        }
+
+
 	if (!buf.put(m_tmp)) {
 		delete m_tmp;
 		m_tmp = NULL;
@@ -874,7 +914,7 @@ read_packet:
 
 
 ReliSock::SndMsg::SndMsg() : 
-    mode_(MD_OFF), 
+    md_mode_(MD_OFF),
     mdChecker_(0),
 	p_sock(0),
 	m_out_buf(NULL)
@@ -949,14 +989,26 @@ int ReliSock::SndMsg::snd_packet( char const *peer_description, int _sock, int e
 	int		len, header_size;
 	int		ns;
 
-	header_size = (mode_ != MD_OFF) ? MAX_HEADER_SIZE : NORMAL_HEADER_SIZE;
+	header_size = (md_mode_ != MD_OFF) ? MAX_HEADER_SIZE : NORMAL_HEADER_SIZE;
 	hdr[0] = (char) end;
 	ns = buf.num_used() - header_size;
 	len = (int) htonl(ns);
 
 	memcpy(&hdr[1], &len, 4);
 
-	if (mode_ != MD_OFF) {
+/*
+	// ZKMZKM
+	//
+        // Wrap (encrypt) the ENTIRE packet.
+        // This is new behavior in 8.7.x.  Previously crypto happened at the
+        // put_bytes/get_bytes layer.
+
+	// TODO:
+	// replace line below with code similar to the code in rcv_packet above
+        buf->wrap();
+*/
+
+	if (md_mode_ != MD_OFF) {
 		if (!buf.computeMD(&hdr[5], mdChecker_)) {
 			dprintf(D_ALWAYS, "IO: Failed to compute Message Digest/MAC\n");
 			return FALSE;
@@ -987,7 +1039,7 @@ bool ReliSock::SndMsg::init_MD(CONDOR_MD_MODE mode, KeyInfo * key)
         return false;
     }
 
-    mode_ = mode;
+    md_mode_ = mode;
     delete mdChecker_;
 	mdChecker_ = 0;
 

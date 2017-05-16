@@ -2878,7 +2878,7 @@ MyString SecMan::getDefaultAuthenticationMethods() {
 
 MyString SecMan::getDefaultCryptoMethods() {
 #ifdef HAVE_EXT_OPENSSL
-	return "3DES,BLOWFISH";
+	return "AES128,3DES,BLOWFISH";
 #else
 	return "";
 #endif
@@ -2974,12 +2974,15 @@ SecMan::getSecTimeout(DCpermission perm)
 }
 
 Protocol CryptProtocolNameToEnum(char const *name) {
+	dprintf(D_ALWAYS, "***** ZKM ***** CryptProtocolNameToEnum called on %s\n", name);
 	switch (toupper(*name)) {
 	case 'B': // blowfish
 		return CONDOR_BLOWFISH;
 	case '3': // 3des
 	case 'T': // Tripledes
 		return CONDOR_3DES;
+	case 'A': // AES128
+		return CONDOR_AES128;
 	default:
 		return CONDOR_NO_PROTOCOL;
 	}

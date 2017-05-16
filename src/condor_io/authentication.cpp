@@ -924,6 +924,7 @@ int Authentication::exchangeKey(KeyInfo *& key)
 				retval = 0;
 				key = NULL;
 			}
+            dprintf(D_ALWAYS, "***** ZKM ***** received a key of protocol %i\n", protocol);
         }
         else {
             key = NULL;
@@ -962,6 +963,7 @@ int Authentication::exchangeKey(KeyInfo *& key)
                 return 0;
             }
         }
+        dprintf(D_ALWAYS, "***** ZKM ***** sent a key of protocol %i\n", protocol);
     }
 
     if (encryptedKey) {

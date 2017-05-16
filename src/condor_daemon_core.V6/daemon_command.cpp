@@ -949,6 +949,10 @@ DaemonCommandProtocol::CommandProtocolResult DaemonCommandProtocol::ReadCommand(
 								dprintf (D_SECURITY, "DC_AUTHENTICATE: generating 3DES key for session %s...\n", m_sid);
 								m_key = new KeyInfo(rbuf, 24, CONDOR_3DES);
 								break;
+							case 'A': // AES128
+								dprintf (D_SECURITY, "DC_AUTHENTICATE: generating AES128 key for session %s...\n", m_sid);
+								m_key = new KeyInfo(rbuf, 24, CONDOR_AES128);
+								break;
 							default:
 								dprintf (D_SECURITY, "DC_AUTHENTICATE: generating RANDOM key for session %s...\n", m_sid);
 								m_key = new KeyInfo(rbuf, 24);

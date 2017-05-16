@@ -425,20 +425,21 @@ int SafeSock::put_bytes(const void *data, int sz)
         }
     }
     else {
-        dta = (unsigned char *) malloc(sz);
-        memcpy(dta, data, sz);
+        l_out = sz;
+        dta = (unsigned char *) malloc(l_out);
+        memcpy(dta, data, l_out);
     }
     
     // Now, add to the MAC
     if (mdChecker_) {
-        mdChecker_->addMD(dta, sz);
+        mdChecker_->addMD(dta, l_out);
     }
 
     //str[0] = 0;
-    //for(int idx=0; idx<sz; idx++) { sprintf(&str[strlen(str)], "%02x,", dta[idx]); }
+    //for(int idx=0; idx<l_out; idx++) { sprintf(&str[strlen(str)], "%02x,", dta[idx]); }
     //dprintf(D_NETWORK, "---> ciphertext: %s\n", str);
 
-    bytesPut = _outMsg.putn((char *)dta, sz);
+    bytesPut = _outMsg.putn((char *)dta, l_out);
     
     free(dta);
     
@@ -499,11 +500,12 @@ int SafeSock::get_bytes(void *dta, int size)
 	if(readSize == size) {
             if (get_encryption()) {
                 unwrap((unsigned char *) tempBuf, readSize, dec, length);
-                memcpy(dta, dec, readSize);
+                memcpy(dta, dec, length);
                 free(dec);
             }
             else {
-                memcpy(dta, tempBuf, readSize);
+                length = readSize;
+                memcpy(dta, tempBuf, length);
             }
 
             //str[0] = 0;
@@ -511,7 +513,7 @@ int SafeSock::get_bytes(void *dta, int size)
             //dprintf(D_NETWORK, "<--- cleartext: %s\n", str);
 
             free(tempBuf);
-            return readSize;
+            return length;
 	} else {
 		free(tempBuf);
         dprintf(D_NETWORK,

@@ -50,6 +50,7 @@ KeyInfo :: KeyInfo(unsigned char * keyData,
 	  protocol_   (protocol),
       duration_   (duration)
 {
+	dprintf(D_ALWAYS, "***** ZKM ***** KeyInfo constructor called with protocol %i\n", protocol);
     init(keyData, keyDataLen);
 }
 

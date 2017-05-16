@@ -51,6 +51,7 @@
 #ifdef HAVE_EXT_OPENSSL
 #include "condor_crypt_blowfish.h"
 #include "condor_crypt_3des.h"
+#include "condor_crypt_aes128.h"
 #include "condor_md.h"                // Message authentication stuff
 #endif
 
@@ -2962,6 +2963,7 @@ void Sock::resetCrypto()
 bool 
 Sock::initialize_crypto(KeyInfo * key) 
 {
+	dprintf(D_ALWAYS, "***** ZKM ***** initialize_crypto called on %i\n", key->getProtocol());
     delete crypto_;
     crypto_ = 0;
 	crypto_mode_ = false;
@@ -2978,6 +2980,10 @@ Sock::initialize_crypto(KeyInfo * key)
         case CONDOR_3DES:
 			setCryptoMethodUsed("3DES");
             crypto_ = new Condor_Crypt_3des(*key);
+            break;
+        case CONDOR_AES128:
+			setCryptoMethodUsed("AES128");
+            crypto_ = new Condor_Crypt_AES128(*key);
             break;
 #endif
         default:
