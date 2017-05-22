@@ -1541,6 +1541,8 @@ Dag::SubmitReadyJobs(const Dagman &dm)
                     }
 
                         // Create the halt file
+                    debug_printf( DEBUG_QUIET, "Automatically generating a "
+                            "halt file for sub-DAG %s\n", job->GetJobName() );
                     FILE *fp = safe_fopen_wrapper_follow( haltFile.Value(), "w" );
                 	if ( fp == NULL ) {
                 		debug_printf( DEBUG_QUIET,
@@ -1560,8 +1562,28 @@ Dag::SubmitReadyJobs(const Dagman &dm)
 	}
 	if ( prevDagIsHalted ) {
 		if ( !_dagIsHalted ) {
-			debug_printf( DEBUG_QUIET,
+            debug_printf( DEBUG_QUIET,
 						"DAG going from halted to running state\n" );
+
+                // Check if we need to propagate this change to SugDAGs, and if
+                // so delete all their halt files.
+            Job* job;            
+            _jobs.Rewind();
+            while( (job = _jobs.Next() ) != NULL ) {
+                if( job->GetDagFile() && _propagateHaltsToSubdags ) {
+                    debug_printf( DEBUG_QUIET, "Automatically removing the "
+                            "halt file for sub-DAG %s\n", job->GetJobName() );                    
+                    MyString haltFile;
+                    if( job->GetDirectory() && strlen( job->GetDirectory() ) > 0 ) {
+                        haltFile = HaltFilePath( job->GetDagFile(), 
+                                                        job->GetDirectory() );
+                    }
+                    else {
+                        haltFile = HaltFileName( job->GetDagFile() ); 
+                    }
+                    tolerant_unlink( haltFile.Value() );
+                }
+            }
 		}
 			// If going from the halted to the not halted state, we need
 			// to fire up any PRE scripts that were deferred while we were
