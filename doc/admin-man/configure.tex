@@ -11075,6 +11075,15 @@ not changed by doing a \Condor{reconfig}.
   in \File{.condor.sub} are considered nested DAGs.
   The default value if not defined is \Expr{True}.
 
+\label{param:DAGManPropagateHaltsToSubdags}
+\item[\Macro{DAGMAN\_PROPAGATE\_HALTS\_TO\_SUBDAGS}]
+  A boolean value that indicates whether \Condor{dagman}, upon noticing a halt
+  file, will then propagate halt files to all nested DAGs causing them to halt
+  also.
+  If set to \Expr{False}, then nested DAGs will continue to submit jobs 
+  normally despite the top-level DAG being halted.
+  The default value if not defined is \Expr{True}.
+
 \label{param:DAGManRemoveNodeJobs}
 \item[\Macro{DAGMAN\_REMOVE\_NODE\_JOBS}]
   A boolean value that controls whether \Condor{dagman} removes its
