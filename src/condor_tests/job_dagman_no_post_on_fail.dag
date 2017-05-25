@@ -6,4 +6,4 @@ SCRIPT POST B job_dagman_no_post_on_fail-B.sh
 
 PARENT A CHILD B
 
-NO_POST_ON_FAIL B
+NO_POST_ON_FAIL B true

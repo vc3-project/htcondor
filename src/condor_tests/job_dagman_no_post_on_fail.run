@@ -19,11 +19,13 @@
 ##
 ##**************************************************************
 
-# This tests part of the "allow PRE script to skip node job" feature
-# (gittrac #2122).  Both nodes have the skip option enabled; node A's
-# job should be run because the PRE script returns 0; node B's job should
-# not be run because the PRE script returns a non-skip error -- therefore
-# the node (and the DAG) are considered failed.
+# This tests the NO_POST_ON_FAIL feature (gittrac #6214).  
+# * Both nodes (A and B) run a simple perl job which returns 1, indiciating a
+#   failure. However both nodes include a POST script which runs successfully.
+# * Node A does not have NO_POST_ON_FAIL set (it default to False). Because the
+#   job fails but POST script succeeds, node A is successful.
+# * Node B has NO_POST_ON_FAIL set to true. So after the job fails, it skips the
+#   POST script, and node B fails.
 
 use CondorTest;
 use CondorUtils;

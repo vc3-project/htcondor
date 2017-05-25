@@ -875,7 +875,9 @@ Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
 	// now to make sure parallel universe support is complete for 6.7.17.
 	// wenger 2006-02-15.
 	//
-	if ( failed && job->_scriptPost == NULL ) {
+    // Make sure to check for the noPostOnFail flag, which means that a job is
+    // immediately considered a failure regarldess of post script.
+	if ( failed && ( job->_scriptPost == NULL || job->GetNoPostOnFail() ) ) {
 		if ( job->DoRetry() ) {
 			RestartNode( job, recovery );
 		} else {
@@ -895,19 +897,6 @@ Dag::ProcessJobProcEnd(Job *job, bool recovery, bool failed) {
 		}
 		return;
 	}
-
-        // If _noPostOnFail is set to true, then we skip the post script and
-        // the whole job fails. In theory we could probably merge this logic
-        // with the code block above, but it would get complicated and 
-        // difficult to maintain or debug.
-    if ( failed && job->_scriptPost != NULL && job->GetNoPostOnFail() == true ) {
-        _numNodesFailed++;
-		_metrics->NodeFinished( job->GetDagFile() != NULL, false );
-		if ( _dagStatus == DAG_STATUS_OK ) {
-			_dagStatus = DAG_STATUS_NODE_FAILED;
-		}
-        return;
-    }
 
 	if ( job->_queuedNodeJobProcs == 0 ) {
 			// All procs for this job are done.
