@@ -74,6 +74,13 @@ EC2GahpClient * startOneGahpClient( const std::string & publicKeyFile, const std
 	args.AppendArg( "-s" );
 	args.AppendArg( "ANNEX_GAHP" );
 
+	std::string logDirectory;
+	param( logDirectory, "LOG" );
+	if(! logDirectory.empty()) {
+		args.AppendArg( "-l" );
+		args.AppendArg( logDirectory.c_str() );
+	}
+
 	args.AppendArg( "-w" );
 	int minWorkerCount = param_integer( "ANNEX_GAHP_WORKER_MIN_NUM", 1 );
 	args.AppendArg( minWorkerCount );
@@ -140,7 +147,7 @@ std::string commandStateFile;
 
 void
 main_config() {
-	commandStateFile = param( "ANNEXD_COMMAND_STATE" );
+	commandStateFile = param( "ANNEX_COMMAND_STATE" );
 }
 
 bool
@@ -239,9 +246,18 @@ createConfigTarball(	const char * configDir,
 
 	std::string localPasswordFile;
 	param( localPasswordFile, "SEC_PASSWORD_FILE" );
-	if( passwordFile.empty() ) {
+	if( localPasswordFile.empty() ) {
 		formatstr( tarballError, "SEC_PASSWORD_FILE empty or undefined" );
 		return false;
+	}
+
+	fd = open( localPasswordFile.c_str(), O_RDONLY );
+	if( fd == -1 ) {
+		formatstr( tarballError, "Unable to open SEC_PASSWORD_FILE '%s': %s (%d)",
+			localPasswordFile.c_str(), strerror(errno), errno );
+		return false;
+	} else {
+		close( fd );
 	}
 
 	// FIXME: Rewrite without system().
@@ -355,7 +371,9 @@ readShortFile( const char * fileName, std::string & contents ) {
 
 void
 help( const char * argv0 ) {
-	fprintf( stdout, "usage: %s -annex-name <annex-name> -count|-slots <number>\n"
+	fprintf( stdout, "To create an annex:\n"
+		"%s -annex-name <annex-name> -count|-slots <number>\n"
+		"\n"
 		"For on-demand instances:\n"
 		"\t[-aws-on-demand]\n"
 		"\t-count <integer number of instances>\n"
@@ -406,10 +424,14 @@ help( const char * argv0 ) {
 		"\n"
 		"OR, to do the one-time setup for an AWS account:\n"
 		"%s -setup [</full/path/to/access-key-file> </full/path/to/secret-key-file> [<CloudFormation URL>]]\n"
+		"\n"
 		"OR, to check the status of your annex:\n"
 		"%s -check -annex[-name] <annex-name> [-classad[s]]\n"
 		"\n"
-		, argv0, argv0, argv0 );
+		"OR, to reset the lease on an existing annex:\n"
+		"%s -annex[-name] <annex-name> -duration <lease duration in decimal hours>\n"
+		"\n"
+		, argv0, argv0, argv0, argv0 );
 }
 
 
@@ -568,7 +590,7 @@ void getSFRApproval(	ClassAd & commandArguments, const char * sfrConfigFile,
 			fprintf( stderr, "Failed to parse spot fleet request, found no attributes.\n" );
 			exit( 2 );
 		} else if( numAttrs > 11 ) {
-			fprintf( stderr, "Failed to parse spot fleet reqeust, found too many attributes.\n" );
+			fprintf( stderr, "Failed to parse spot fleet request, found too many attributes.\n" );
 			exit( 2 );
 		}
 
@@ -578,7 +600,7 @@ void getSFRApproval(	ClassAd & commandArguments, const char * sfrConfigFile,
 	}
 
 	fprintf( stdout,
-		"Will request %ld spot instance%s for %.2f hours.  "
+		"Will request %ld spot slot%s for %.2f hours.  "
 		"Each instance will terminate after being idle for %.2f hours.\n",
 		count,
 		count == 1 ? "" : "s",
@@ -651,6 +673,17 @@ void assignWithDefault(	ClassAd & commandArguments, const char * & value,
 	if( value ) {
 		commandArguments.Assign( argName, value );
 	}
+}
+
+void dumpParam( const char * attribute ) {
+	std::string value;
+	param( value, attribute );
+	dprintf( D_AUDIT | D_NOHEADER, "%s = %s\n", attribute, value.c_str() );
+}
+
+void dumpParam( const char * attribute, int defaultValue ) {
+	int value = param_integer( attribute, defaultValue );
+	dprintf( D_AUDIT | D_NOHEADER, "%s = %d\n", attribute, value );
 }
 
 int _argc;
@@ -1201,6 +1234,42 @@ annex_main( int argc, char ** argv ) {
 			break;
 	}
 
+	std::string arguments = argv[0]; arguments += " ";
+	for( int i = 1; i < argc; ++i ) {
+		formatstr( arguments, "%s%s ", arguments.c_str(), argv[i] );
+	}
+	arguments.erase( arguments.length() - 1 );
+	dprintf( D_AUDIT | D_IDENT | D_PID, getuid(), "%s\n", arguments.c_str() );
+
+	// Dump the relevant param table entires, if anyone's interested.
+	if( IsDebugCatAndVerbosity( (D_AUDIT | D_VERBOSE) ) ) {
+		dumpParam( "ANNEX_PROVISIONING_DELAY", 5 * 60 );
+		dumpParam( "COLLECTOR_HOST" );
+		dumpParam( "USER_CONFIG_FILE" );
+		dumpParam( "ANNEX_DEFAULT_EC2_URL" );
+		dumpParam( "ANNEX_DEFAULT_CWE_URL" );
+		dumpParam( "ANNEX_DEFAULT_LAMBDA_URL" );
+		dumpParam( "ANNEX_DEFAULT_S3_URL" );
+		dumpParam( "ANNEX_DEFAULT_CF_URL" );
+		dumpParam( "ANNEX_DEFAULT_CWE_URL" );
+		dumpParam( "ANNEX_DEFAULT_ACCESS_KEY_FILE" );
+		dumpParam( "ANNEX_DEFAULT_SECRET_KEY_FILE" );
+		dumpParam( "ANNEX_DEFAULT_CONNECTIVITY_FUNCTION_ARN" );
+		dumpParam( "ANNEX_GAHP_WORKER_MIN_NUM", 1 );
+		dumpParam( "ANNEX_GAHP_WORKER_MAX_NUM", 1 );
+		dumpParam( "ANNEX_GAHP_DEBUG");
+		dumpParam( "ANNEX_GAHP" );
+		dumpParam( "ANNEX_GAHP_CALL_TIMEOUT", 10 * 60 );
+		dumpParam( "ANNEX_COMMAND_STATE" );
+		dumpParam( "SEC_PASSWORD_FILE" );
+		dumpParam( "ANNEX_DEFAULT_LEASE_DURATION", 3000 );
+		dumpParam( "ANNEX_DEFAULT_UNCLAIMED_TIMEOUT", 900 );
+		dumpParam( "ANNEX_DEFAULT_SFR_CONFIG_FILE" );
+		dumpParam( "ANNEX_DEFAULT_S3_BUCKET" );
+		dumpParam( "ANNEX_DEFAULT_SFR_LEASE_FUNCTION_ARN" );
+		dumpParam( "ANNEX_DEFAULT_ODI_LEASE_FUNCTION_ARN" );
+	}
+
 	switch( theCommand ) {
 		case ct_status:
 			return status( annexName, wantClassAds, serviceURL );
@@ -1292,8 +1361,7 @@ main_pre_command_sock_init() {
 
 int
 main( int argc, char ** argv ) {
-	set_mySubSystem( "ANNEXD", SUBSYSTEM_TYPE_DAEMON );
-
+	set_mySubSystem( "ANNEX", SUBSYSTEM_TYPE_DAEMON );
 
 	// This is dumb, but easier than fighting daemon core about parsing.
 	_argc = argc;
@@ -1305,16 +1373,24 @@ main( int argc, char ** argv ) {
 	// This is also dumb, but less dangerous than (a) reaching into daemon
 	// core to set a flag and (b) hoping that my command-line arguments and
 	// its command-line arguments don't conflict.
-	char ** dcArgv = (char **)malloc( 4 * sizeof( char * ) );
+	char ** dcArgv = (char **)malloc( 6 * sizeof( char * ) );
 	dcArgv[0] = argv[0];
 	// Force daemon core to run in the foreground.
 	dcArgv[1] = strdup( "-f" );
 	// Disable the daemon core command socket.
 	dcArgv[2] = strdup( "-p" );
 	dcArgv[3] = strdup(  "0" );
-	argc = 4;
-	argv = dcArgv;
 
+	// We need to spin up the param system to find the user config directory,
+	// to which we want to log.
+	config_ex( CONFIG_OPT_WANT_META );
+	std::string userDir;
+	dcArgv[4] = strdup( "-log" );
+	if(! createUserConfigDir( userDir )) { return 1; }
+	dcArgv[5] = strdup( userDir.c_str() );
+
+	argc = 6;
+	argv = dcArgv;
 
 	dc_main_init = & main_init;
 	dc_main_config = & main_config;
