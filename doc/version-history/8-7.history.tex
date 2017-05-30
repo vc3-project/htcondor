@@ -68,7 +68,6 @@ was set to default to 100. It formerly had no default value.
 and \Condor{userprio}.
 \Ticket{5717}
 
-\end{itemize}
 
 \item In DAGMan, the appearance of a .halt file would previously have no effect
 on SubDAGs. These would continue to submit jobs normally despite the top-level
@@ -76,6 +75,8 @@ DAG being halted. Now .halt files are automatically propagated to all SubDAGs.
 A new knob, DAGMAN\_PROPAGATE\_HALTS\_TO\_SUBDAGS, can be set to False to
 revert to the previous behavior.
 \Ticket{5621}
+
+\end{itemize}
 
 \noindent Bugs Fixed:
 

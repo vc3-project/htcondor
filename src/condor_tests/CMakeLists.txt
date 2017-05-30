@@ -682,6 +682,7 @@ if (BUILD_TESTING)
 	#condor_pl_test(job_dagman_use_hold_claim "Test holding of claims for DAGman" "dagman;quick;full;quicknolink")
 	# turned off for now ticket #4386
 	#condor_pl_test(job_dagman_halt-A "Test DAG halting" "dagman;quick;full;quicknolink")
+	condor_pl_test(job_dagman_halt-B "Test DAG halt propagation to sub-DAGs" "dagman;quick;full;quicknolink")
 	condor_pl_test(job_dagman_loglink "Test node job user logs as symlinks" "dagman;quick;full;quicknolink")
 	condor_pl_test(job_dagman_global_event_log-A "Test behavior in presence of global event log" "dagman;quick;full;quicknolink")
 	condor_pl_test(job_dagman_global_event_log-B "Test behavior in presence of global event log" "dagman;quick;full;quicknolink")

@@ -84,6 +84,7 @@ job_dagman_global_event_log-A
 job_dagman_global_event_log-B
 job_dagman_gt1957
 job_dagman_halt-A
+job_dagman_halt-B
 job_dagman_job_held
 job_dagman_jobstate_log
 job_dagman_large_dag

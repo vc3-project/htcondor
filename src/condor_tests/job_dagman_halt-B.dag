@@ -1,0 +1,25 @@
+NODE_STATUS_FILE job_dagman_halt-B.status 600
+
+# This waits until the DAG is halted, sleeps, and then un-halts the DAG.
+# This has no relationship to the other nodes, it just waits in the background
+# until a halt file is detedted.
+JOB NodeWaitUnhalt job_dagman_halt-B-node.cmd
+VARS NodeWaitUnhalt nodename="$(JOB)"
+VARS NodeWaitUnhalt args="$(JOB) -unhalt"
+PRIORITY NodeWaitUnhalt 10
+
+# This node halts the DAG.
+JOB NodeHalt job_dagman_halt-B-node.cmd
+Script Post NodeHalt job_dagman_halt-B-script.pl Post $JOB
+VARS NodeHalt nodename="$(JOB)"
+VARS NodeHalt args="$(JOB) -halt"
+PRIORITY NodeHalt 5
+
+# Now, the sub-DAG which runs normally. 
+# This tests that things are resumed correctly after the DAG is un-halted.
+SUBDAG EXTERNAL NodeSubdag job_dagman_halt-B-sub.dag
+
+
+
+PARENT NodeHalt CHILD NodeSubdag
+
