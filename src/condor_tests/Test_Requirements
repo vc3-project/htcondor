@@ -158,6 +158,7 @@ job_dagman_log_path: personal
 job_dagman_maxpostscripts:  personal
 job_dagman_maxprescripts:  personal
 job_dagman_multi_dag: personal
+job_dagman_no_post_on_fail: personal
 job_dagman_node_dir: personal
 job_dagman_node_prio: personal
 job_dagman_node_status: personal
