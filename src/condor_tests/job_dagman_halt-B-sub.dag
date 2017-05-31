@@ -1,1 +1,2 @@
-JOB NodeSleep job_dagman_halt-B-sub-node.cmd
+JOB NodeSubdag job_dagman_halt-B-sub-node.cmd
+VARS NodeSubdag nodename="$(JOB)"

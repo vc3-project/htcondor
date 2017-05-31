@@ -32,15 +32,15 @@ use CondorUtils;
 $cmd = 'job_dagman_halt-B.dag';
 $testdesc =  'Condor submit dag - halt subdag propagation test - scheduler U';
 $testname = "job_dagman_halt-B";
-$dagman_args = "-verbose";
+$dagman_args = "-verbose -maxpre 1";
 
 $node_output_file = "job_dagman_halt-B.nodes.out";
 $halt_file = "job_dagman_halt-B.dag.halt";
 
 # Note: we must find these lines *in the specified order*.
-@node_output_lines = ("Node NodeHalt starting", 
-            "Node NodeWaitUnhalt starting", 
-            "  NodeWaitUnhalt sleeping and checking for halt file", 
+@node_output_lines = ("Node NodeWaitUnhalt starting", 
+            "  NodeWaitUnhalt sleeping and checking for halt file",
+            "Node NodeHalt starting", 
             "  NodeHalt halting DAG", 
             "  NodeWaitUnhalt found halt file", 
             "Node NodeHalt succeeded", 

@@ -4,13 +4,15 @@ NODE_STATUS_FILE job_dagman_halt-B.status 600
 # This has no relationship to the other nodes, it just waits in the background
 # until a halt file is detedted.
 JOB NodeWaitUnhalt job_dagman_halt-B-node.cmd
+SCRIPT PRE NodeWaitUnhalt job_dagman_halt-B-script.pl Pre $JOB
 VARS NodeWaitUnhalt nodename="$(JOB)"
 VARS NodeWaitUnhalt args="$(JOB) -unhalt"
 PRIORITY NodeWaitUnhalt 10
 
 # This node halts the DAG.
 JOB NodeHalt job_dagman_halt-B-node.cmd
-Script Post NodeHalt job_dagman_halt-B-script.pl Post $JOB
+SCRIPT PRE NodeHalt job_dagman_halt-B-script.pl Pre $JOB
+SCRIPT POST NodeHalt job_dagman_halt-B-script.pl Post $JOB
 VARS NodeHalt nodename="$(JOB)"
 VARS NodeHalt args="$(JOB) -halt"
 PRIORITY NodeHalt 5
