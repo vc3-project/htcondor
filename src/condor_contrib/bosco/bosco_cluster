@@ -937,7 +937,7 @@ fi
 #TODO: do we need a separate sandbox for each cluster?
 remote_base_dir_root="bosco/cluster"
 remote_base_dir_default="$remote_base_dir_root/default"
-remote_base_dir_host="bosco"
+remote_base_dir_host="vc3"
 tmp_install_dir=`mktemp -d /tmp/tmp.XXXXXXXX`
 mkdir -p $tmp_install_dir/$remote_base_dir_host
 local_install_dir=$tmp_install_dir/$remote_base_dir_host

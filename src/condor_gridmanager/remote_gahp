@@ -26,7 +26,7 @@ REMOTE_USER=`whoami`
 unset HOME
 export HOME=`echo ~`
 # Needs '~' because resolved on remote site
-REMOTE_GLITE="~/bosco/glite"
+REMOTE_GLITE="~/vc3/glite"
 # We do this in case $HOME isn't set properly
 PASSPHRASE_LOCATION=`echo ~/.bosco/.pass`
 PRIVATE_KEY_LOCATION=`echo ~/.ssh/bosco_key.rsa`
