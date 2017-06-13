@@ -13,7 +13,7 @@ env:
   matrix:
   - os="rhel6"
   - os="rhel7"
-script: ./build.sh $os
+script: ./build.sh $os > install.log 2>&1 && tail -n 100 install.log
 
 deploy:
   provider: releases
