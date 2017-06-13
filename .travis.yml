@@ -6,7 +6,7 @@ notifications:
   email: false
 
 before_install:
-  - curl https://github.com/vc3-project/vc3-utility-scripts/blob/master/htcondor-build/build.sh -o build.sh
+  - curl https://raw.githubusercontent.com/vc3-project/vc3-utility-scripts/master/htcondor-build/build.sh -o build.sh
   - chmod +x build.sh
 
 env:
