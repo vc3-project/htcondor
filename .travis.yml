@@ -17,6 +17,7 @@ script: ./build.sh $os
 
 deploy:
   provider: releases
+  skip_cleanup: true
   api_key:
     secure: Vzjaz3vW8BKqW4SATP7X6fVwlRE0RlH9v01FFt42iWOsjOlXjeBKysyZjv7Gsx8d5E++DZFvFsohsMUzLjHSlpCpFcRdqvH3W1uTfJIl+P+7V2N3DYj/ZBQtDcBdwlCY3EC/XOpJw/byyK4d4gyAD+FMCEBN17Hcj2VJdm4ODNrRs/IdHVVgwsL0tQPci2waw9TJRLLsbgwdp+aI2jQbjJnffGTDSkoQ32IM4SOju6aw6ok/BAviSd2YUALHD8UoQofRHj2Qte34erq9NcYhHOGEZEM1chbdR5l5Ne2E0PXA1l4SnyeUWhoRxd6fT3C7ZpOg7Y6zl5HBgylKICzsX6U5FvkCjW9VtIafcl+Dc5KyiBthH8qr1a1sQYncGWZks+tW4pi7zToLnx1qX3AYnLoHC+oOZd1ZOlFOZd3bqUmWp884J2A8oqCb/PnQr2PVTfun487pfnVmohClMw/0d8oY0P0fmH9QkZWX/zIocPICZqMLoWzh5FdENyMiW5J7mv6eAtecKt78hRGlb8BZl++YZOFsakF4l2hRAGeUU6jr6fJbRwblq18xrfXwOrXuJEqF2/JcyTCoCs3IJscgUjYe0VosnjTJijQKBTKmSEvsYSDfnE7cNJaXbQLbwyW52zLbkz87Y2k9eMD1gLE/9O4I/FiWZD+I9eb1T2wgmNQ=
   file: '*.tar.gz'
