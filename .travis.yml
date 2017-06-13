@@ -1,13 +1,14 @@
 language: cpp
 sudo: false
 services:
-- docker
+  - docker
 notifications:
   email: false
 
 before_install:
-- curl https://github.com/vc3-project/vc3-utility-scripts/blob/master/htcondor-build/build.sh
-  -o build.sh
+  - curl https://github.com/vc3-project/vc3-utility-scripts/blob/master/htcondor-build/build.sh -o build.sh
+  - chmod +x build.sh
+
 env:
   matrix:
   - os="rhel6"
