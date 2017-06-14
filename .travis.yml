@@ -13,7 +13,7 @@ env:
   matrix:
   - os="rhel6"
   - os="rhel7"
-script: ./build.sh $os
+script: ./build.sh $os > build.log 2>&1 & ppid=$! && while true; do if [ -d /proc/$ppid ]; then tail build.log && sleep 30 ; else break; fi; done
 
 deploy:
   provider: releases
